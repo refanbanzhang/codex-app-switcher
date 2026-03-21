@@ -24,7 +24,7 @@ Requirements:
 Clone the repository and enter the project directory:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/refanbanzhang/codex-app-switcher.git
 cd codex-app-switcher
 ```
 
