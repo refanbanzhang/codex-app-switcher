@@ -15,7 +15,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "CodexAppSwitcher",
-            path: "Sources/CodexAppSwitcher"
+            path: "Sources/CodexAppSwitcher",
+            exclude: ["Assets.xcassets"]
         )
     ]
 )
