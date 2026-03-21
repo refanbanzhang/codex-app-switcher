@@ -14,12 +14,6 @@ A macOS utility to quickly switch Codex accounts and launch Codex.
 - Supports signing in a new account, importing/exporting account JSON, and clearing saved accounts.
 - Supports Chinese and English UI, plus light and dark themes.
 
-## UI Notes
-
-- On launch, the account list is rendered from local storage first; usage refresh runs in the background so the window is usable immediately.
-- Toolbar and row actions are icon-first. Labels appear on hover.
-- Double-click an email to temporarily reveal the full address instead of the masked version.
-
 ## Quick Start
 
 Requirements:
@@ -27,10 +21,11 @@ Requirements:
 - macOS
 - Xcode
 
-Open the project in Xcode:
+Clone the repository and enter the project directory:
 
 ```bash
-open ./codex-app-switcher.xcodeproj
+git clone <repo-url>
+cd codex-app-switcher
 ```
 
 Build the `.app` from the repository root:
