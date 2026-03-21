@@ -2,19 +2,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "CodexSwitcher",
+    name: "codex-app-switcher",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .executable(
-            name: "CodexSwitcher",
-            targets: ["CodexSwitcher"]
+            name: "codex-app-switcher",
+            targets: ["CodexAppSwitcher"]
         )
     ],
     targets: [
         .executableTarget(
-            name: "CodexSwitcher"
+            name: "CodexAppSwitcher",
+            path: "Sources/CodexAppSwitcher"
         )
     ]
 )

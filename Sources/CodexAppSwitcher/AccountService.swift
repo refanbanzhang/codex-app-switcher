@@ -75,7 +75,7 @@ struct AccountService: @unchecked Sendable {
         store.currentSelection = CurrentAccountSelection(
             accountID: summary.accountID,
             selectedAt: Int64(Date().timeIntervalSince1970 * 1_000),
-            sourceDeviceID: "codex-switcher"
+            sourceDeviceID: "codex-app-switcher"
         )
         try storeRepository.save(store)
 
@@ -103,7 +103,7 @@ struct AccountService: @unchecked Sendable {
         store.currentSelection = CurrentAccountSelection(
             accountID: extracted.accountID,
             selectedAt: Int64(Date().timeIntervalSince1970 * 1_000),
-            sourceDeviceID: "codex-switcher"
+            sourceDeviceID: "codex-app-switcher"
         )
         try storeRepository.save(store)
 

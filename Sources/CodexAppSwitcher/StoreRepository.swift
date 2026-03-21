@@ -15,14 +15,14 @@ struct StoreRepository {
 
     func load() throws -> AccountStore {
         guard fileManager.fileExists(atPath: paths.accountStorePath.path) else {
-            throw CLIError("Copool account store not found at \(paths.accountStorePath.path)")
+            throw CLIError("Account store not found at \(paths.accountStorePath.path)")
         }
 
         return try loadOrEmpty()
     }
 
     func save(_ store: AccountStore) throws {
-        try fileManager.createDirectory(at: paths.copoolAppSupportDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: paths.appSupportDirectory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(store)

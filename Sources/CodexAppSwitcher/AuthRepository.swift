@@ -575,12 +575,12 @@ final class OpenAIChatGPTOAuthLoginService: @unchecked Sendable {
     }
 
     private static func successPageHTML() -> Data {
-        Data("<html><head><meta charset=\"utf-8\"><title>Codex Switcher</title></head><body style=\"font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:32px;\"><h2>Sign-in complete</h2><p>You can return to Codex Switcher.</p></body></html>".utf8)
+        Data("<html><head><meta charset=\"utf-8\"><title>codex-app-switcher</title></head><body style=\"font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:32px;\"><h2>Sign-in complete</h2><p>You can return to codex-app-switcher.</p></body></html>".utf8)
     }
 
     private static func errorPageHTML(message: String) -> Data {
         let escapedMessage = htmlEscape(message)
-        return Data("<html><head><meta charset=\"utf-8\"><title>Codex Switcher</title></head><body style=\"font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:32px;\"><h2>Sign-in failed</h2><p>\(escapedMessage)</p></body></html>".utf8)
+        return Data("<html><head><meta charset=\"utf-8\"><title>codex-app-switcher</title></head><body style=\"font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:32px;\"><h2>Sign-in failed</h2><p>\(escapedMessage)</p></body></html>".utf8)
     }
 
     private static func htmlEscape(_ value: String) -> String {

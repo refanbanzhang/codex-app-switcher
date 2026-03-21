@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 主窗口与 sheet 共用列宽，避免弹层比窗口更宽。
-private enum CodexSwitcherLayout {
+private enum CodexAppSwitcherLayout {
     static let columnWidth: CGFloat = 390
 }
 
@@ -67,9 +67,9 @@ private struct AppCopy {
     var emptyAccountsNotice: String {
         switch language {
         case .chinese:
-            return "Copool 里还没有可切换的账号。"
+            return "保存列表中还没有可切换的账号。"
         case .english:
-            return "No switchable accounts were found in Copool yet."
+            return "No switchable accounts in the saved list yet."
         }
     }
 
@@ -131,14 +131,14 @@ private struct AppCopy {
         switch language {
         case .chinese:
             if let accountName {
-                return "将从 Copool 保存列表中移除 \(accountName)。当前账号不能删除。"
+                return "将从保存列表中移除 \(accountName)。当前账号不能删除。"
             }
-            return "将从 Copool 保存列表中移除此账号。"
+            return "将从保存列表中移除此账号。"
         case .english:
             if let accountName {
-                return "This removes \(accountName) from the Copool saved list. The current account cannot be deleted."
+                return "This removes \(accountName) from the saved list. The current account cannot be deleted."
             }
-            return "This removes the account from the Copool saved list."
+            return "This removes the account from the saved list."
         }
     }
 
@@ -362,9 +362,9 @@ private struct AppCopy {
     var accountStorePathLabel: String {
         switch language {
         case .chinese:
-            return "读取路径：~/Library/Application Support/CodexToolsSwift/accounts.json"
+            return "读取路径：~/Library/Application Support/codex-app-switcher/accounts.json"
         case .english:
-            return "Store path: ~/Library/Application Support/CodexToolsSwift/accounts.json"
+            return "Store path: ~/Library/Application Support/codex-app-switcher/accounts.json"
         }
     }
 
@@ -431,7 +431,7 @@ fileprivate enum AppNotice {
 }
 
 @main
-struct CodexSwitcherApp: App {
+struct CodexAppSwitcherApp: App {
     @StateObject private var model = AccountSwitcherViewModel()
     @AppStorage(AppTheme.storageKey) private var storedTheme = AppTheme.light.rawValue
 
@@ -440,9 +440,9 @@ struct CodexSwitcherApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Codex Switcher") {
+        WindowGroup("codex-app-switcher") {
             ContentView(model: model)
-                .frame(minWidth: CodexSwitcherLayout.columnWidth, idealWidth: CodexSwitcherLayout.columnWidth, maxWidth: 430, minHeight: 760)
+                .frame(minWidth: CodexAppSwitcherLayout.columnWidth, idealWidth: CodexAppSwitcherLayout.columnWidth, maxWidth: 430, minHeight: 760)
                 .preferredColorScheme(selectedTheme.colorScheme)
         }
         .windowResizability(.contentSize)
@@ -488,14 +488,14 @@ final class AccountSwitcherViewModel: ObservableObject {
         } catch {
             self.accountService = AccountService(
                 authRepository: AuthRepository(paths: AppPaths(
-                    copoolAppSupportDirectory: URL(fileURLWithPath: "/"),
+                    appSupportDirectory: URL(fileURLWithPath: "/"),
                     accountStorePath: URL(fileURLWithPath: "/"),
                     codexAuthPath: URL(fileURLWithPath: "/"),
                     codexConfigPath: URL(fileURLWithPath: "/"),
                     authBackupDirectory: URL(fileURLWithPath: "/")
                 )),
                 storeRepository: StoreRepository(paths: AppPaths(
-                    copoolAppSupportDirectory: URL(fileURLWithPath: "/"),
+                    appSupportDirectory: URL(fileURLWithPath: "/"),
                     accountStorePath: URL(fileURLWithPath: "/"),
                     codexAuthPath: URL(fileURLWithPath: "/"),
                     codexConfigPath: URL(fileURLWithPath: "/"),
@@ -1750,7 +1750,7 @@ private func usageTimeFormatter(for language: AppLanguage) -> DateFormatter {
     return formatter
 }
 
-#Preview("Codex Switcher") {
+#Preview("codex-app-switcher") {
     ContentView(model: AccountSwitcherViewModel())
-        .frame(width: CodexSwitcherLayout.columnWidth, height: 760)
+        .frame(width: CodexAppSwitcherLayout.columnWidth, height: 760)
 }
