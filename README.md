@@ -45,17 +45,3 @@ Launch:
 ```bash
 open ./dist/codex-app-switcher.app
 ```
-
-## Privacy Guard (Recommended)
-
-Install the built-in `pre-commit` hook to scan staged files for common secrets before commit:
-
-```bash
-./scripts/install-git-hooks.sh
-```
-
-If a commit is blocked, unstage suspicious files first:
-
-```bash
-git restore --staged <file>
-```
