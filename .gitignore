@@ -11,6 +11,7 @@ DerivedData/
 **/xcuserdata/**
 
 # Build products (local)
+build/
 *.ipa
 *.dSYM.zip
 dist/

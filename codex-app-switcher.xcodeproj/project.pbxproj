@@ -16,6 +16,7 @@
 		A10000000000000000000017 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000027 /* Models.swift */; };
 		A10000000000000000000018 /* StoreRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* StoreRepository.swift */; };
 		A10000000000000000000019 /* CodexAppController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029 /* CodexAppController.swift */; };
+		A10000000000000000000122 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000120 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +30,7 @@
 		A10000000000000000000028 /* StoreRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreRepository.swift; sourceTree = "<group>"; };
 		A10000000000000000000029 /* CodexAppController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAppController.swift; sourceTree = "<group>"; };
 		A10000000000000000000031 /* codex-app-switcher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = codex-app-switcher.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000120 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,6 +57,7 @@
 			path = Sources/CodexAppSwitcher;
 			sourceTree = SOURCE_ROOT;
 			children = (
+				A10000000000000000000120 /* Assets.xcassets */,
 				A10000000000000000000021 /* AccountService.swift */,
 				A10000000000000000000022 /* AppPaths.swift */,
 				A10000000000000000000023 /* AuthRepository.swift */,
@@ -132,6 +135,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000122 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
