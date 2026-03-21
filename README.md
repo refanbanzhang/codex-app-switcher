@@ -4,19 +4,18 @@ A macOS utility to quickly switch Codex accounts and launch Codex.
 
 ## Quick Start
 
-Packaging dependencies:
+Requirements:
 
 - macOS
-- Xcode Command Line Tools (or Xcode with Swift toolchain)
-- `swift` available in PATH
+- Xcode
 
-Quick check:
+Open the project in Xcode:
 
 ```bash
-swift --version
+open ./codex-app-switcher.xcodeproj
 ```
 
-Package the `.app` from the repository root:
+Build the `.app` from the repository root:
 
 ```bash
 ./scripts/package-app.sh
