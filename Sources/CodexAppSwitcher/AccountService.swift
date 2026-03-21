@@ -13,6 +13,12 @@ struct AccountService: @unchecked Sendable {
         _ = try upsertAccount(authJSON: authJSON)
     }
 
+    func loadAccounts() throws -> [AccountSummary] {
+        let store = try storeRepository.loadOrEmpty()
+        let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID
+        return summaries(from: store, currentAccountID: currentAccountID)
+    }
+
     func refreshUsageForAllAccounts() async throws -> [AccountSummary] {
         var store = try storeRepository.loadOrEmpty()
         let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID

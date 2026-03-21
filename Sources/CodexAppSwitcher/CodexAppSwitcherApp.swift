@@ -178,9 +178,9 @@ private struct AppCopy {
     var loadingAccounts: String {
         switch language {
         case .chinese:
-            return "正在读取账号并刷新用量..."
+            return "正在读取账号..."
         case .english:
-            return "Loading accounts and refreshing usage..."
+            return "Loading accounts..."
         }
     }
 
@@ -519,6 +519,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     private var bannerDismissTask: Task<Void, Never>?
     private var usageAutoRefreshTask: Task<Void, Never>?
     private var isUsageRefreshInFlight = false
+    private var loadGeneration: UInt64 = 0
 
     init() {
         do {
@@ -577,17 +578,16 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func load(preserveNotice: Bool = false) async {
-        guard !isUsageRefreshInFlight else { return }
-        isUsageRefreshInFlight = true
+        loadGeneration &+= 1
+        let generation = loadGeneration
         isLoading = true
-        defer {
-            isLoading = false
-            isUsageRefreshInFlight = false
-        }
 
         do {
             try accountService.syncCurrentAuthAccountOnStartup()
-            accounts = sortAccounts(try await accountService.refreshUsageForAllAccounts())
+            let loadedAccounts = sortAccounts(try accountService.loadAccounts())
+            guard generation == loadGeneration else { return }
+
+            accounts = loadedAccounts
             if !preserveNotice {
                 if accounts.isEmpty {
                     showNotice(.emptyAccounts)
@@ -596,7 +596,14 @@ final class AccountSwitcherViewModel: ObservableObject {
                 }
             }
             errorMessage = nil
+
+            isLoading = false
+            guard !loadedAccounts.isEmpty else { return }
+
+            await refreshUsageIfNeeded(applyForGeneration: generation)
         } catch {
+            guard generation == loadGeneration else { return }
+            isLoading = false
             accounts = []
             showError(error.localizedDescription)
         }
@@ -615,15 +622,28 @@ final class AccountSwitcherViewModel: ObservableObject {
 
     private func runAutomaticUsageRefreshTick() async {
         guard canRunAutomaticUsageRefresh else { return }
+        let generation = loadGeneration
+
+        do {
+            try accountService.syncCurrentAuthAccountOnStartup()
+            await refreshUsageIfNeeded(applyForGeneration: generation)
+        } catch {
+            // Keep automatic refresh silent; manual actions still surface errors to the user.
+        }
+    }
+
+    private func refreshUsageIfNeeded(applyForGeneration generation: UInt64? = nil) async {
+        guard !isUsageRefreshInFlight else { return }
 
         isUsageRefreshInFlight = true
         defer { isUsageRefreshInFlight = false }
 
         do {
-            try accountService.syncCurrentAuthAccountOnStartup()
-            accounts = sortAccounts(try await accountService.refreshUsageForAllAccounts())
+            let refreshedAccounts = sortAccounts(try await accountService.refreshUsageForAllAccounts())
+            guard generation == nil || generation == loadGeneration else { return }
+            accounts = refreshedAccounts
         } catch {
-            // Keep automatic refresh silent; manual actions still surface errors to the user.
+            // Keep post-render refresh silent so the list is usable even if usage fails.
         }
     }
 
