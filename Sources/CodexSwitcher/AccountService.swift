@@ -1,46 +1,93 @@
 import Foundation
 
-struct AccountService {
+struct AccountService: @unchecked Sendable {
     let authRepository: AuthRepository
     let storeRepository: StoreRepository
+    let loginService: OpenAIChatGPTOAuthLoginService
+    let usageService: ChatGPTUsageService
 
     func syncCurrentAuthAccountOnStartup() throws {
         let authJSON = try authRepository.readCurrentAuth()
         _ = try upsertAccount(authJSON: authJSON)
     }
 
-    func importCurrentAuth() throws -> AccountSummary {
-        let authJSON = try authRepository.readCurrentAuth()
-        return try upsertAccount(authJSON: authJSON)
-    }
-
     func listAccounts() throws -> [AccountSummary] {
         let store = try storeRepository.load()
         let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID
+        return summaries(from: store, currentAccountID: currentAccountID)
+    }
 
-        return store.accounts
-            .map { account in
-                AccountSummary(
-                    id: account.id,
-                    label: account.label,
-                    email: account.email,
-                    accountID: account.accountID,
-                    planType: account.planType,
-                    teamName: account.teamName,
-                    usage: account.usage,
-                    isCurrent: account.accountID == currentAccountID
-                )
-            }
-            .sorted { left, right in
-                if left.isCurrent != right.isCurrent {
-                    return left.isCurrent
+    func refreshUsageForAllAccounts() async throws -> [AccountSummary] {
+        var store = try storeRepository.loadOrEmpty()
+        let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID
+
+        guard !store.accounts.isEmpty else {
+            return []
+        }
+
+        var didChangeStore = false
+        let now = Int64(Date().timeIntervalSince1970)
+
+        for index in store.accounts.indices {
+            do {
+                let refreshed = try await usageService.refreshAccount(from: store.accounts[index].authJSON)
+
+                if store.accounts[index].authJSON != refreshed.authJSON {
+                    store.accounts[index].authJSON = refreshed.authJSON
+                    didChangeStore = true
+
+                    if store.accounts[index].accountID == currentAccountID {
+                        try? authRepository.writeCurrentAuth(refreshed.authJSON)
+                    }
                 }
-                return left.displayName.localizedCaseInsensitiveCompare(right.displayName) == .orderedAscending
+
+                store.accounts[index].usage = refreshed.usage
+                let trimmedPlanType = refreshed.planType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !trimmedPlanType.isEmpty {
+                    store.accounts[index].planType = trimmedPlanType
+                }
+                store.accounts[index].updatedAt = now
+                didChangeStore = true
+            } catch {
+                continue
             }
+        }
+
+        if didChangeStore {
+            try storeRepository.save(store)
+        }
+
+        return summaries(from: store, currentAccountID: currentAccountID)
     }
 
     func currentAccount() throws -> AccountSummary? {
         try listAccounts().first(where: \.isCurrent)
+    }
+
+    func addAccountViaLogin(timeoutSeconds: TimeInterval = 10 * 60) async throws -> AccountSummary {
+        try preserveCurrentAuthBeforeSwitch()
+        let tokens = try await loginService.signInWithChatGPT(timeoutSeconds: timeoutSeconds)
+        let authJSON = try authRepository.makeChatGPTAuth(from: tokens)
+        try authRepository.writeCurrentAuth(authJSON)
+
+        let summary = try upsertAccount(authJSON: authJSON)
+        var store = try storeRepository.loadOrEmpty()
+        store.currentSelection = CurrentAccountSelection(
+            accountID: summary.accountID,
+            selectedAt: Int64(Date().timeIntervalSince1970 * 1_000),
+            sourceDeviceID: "codex-switcher"
+        )
+        try storeRepository.save(store)
+
+        return AccountSummary(
+            id: summary.id,
+            label: summary.label,
+            email: summary.email,
+            accountID: summary.accountID,
+            planType: summary.planType,
+            teamName: summary.teamName,
+            isCurrent: true
+        )
     }
 
     func switchAccount(identifier: String) throws -> AccountSummary {
@@ -69,6 +116,37 @@ struct AccountService {
             teamName: account.teamName,
             usage: account.usage,
             isCurrent: true
+        )
+    }
+
+    func deleteAccount(identifier: String) throws -> AccountSummary {
+        var store = try storeRepository.load()
+        let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID
+
+        guard let index = store.accounts.firstIndex(where: { $0.id == identifier || $0.accountID == identifier }) else {
+            throw CLIError("Account not found for identifier: \(identifier)")
+        }
+
+        let account = store.accounts[index]
+        if account.accountID == currentAccountID {
+            throw CLIError("不能删除当前账号，请先切换到其他账号。")
+        }
+
+        store.accounts.remove(at: index)
+        if store.currentSelection?.accountID == account.accountID {
+            store.currentSelection = nil
+        }
+        try storeRepository.save(store)
+
+        return AccountSummary(
+            id: account.id,
+            label: account.label,
+            email: account.email,
+            accountID: account.accountID,
+            planType: account.planType,
+            teamName: account.teamName,
+            usage: account.usage,
+            isCurrent: false
         )
     }
 
@@ -124,5 +202,285 @@ struct AccountService {
             usage: saved.usage,
             isCurrent: saved.accountID == currentAccountID
         )
+    }
+
+    private func summaries(from store: AccountStore, currentAccountID: String?) -> [AccountSummary] {
+        store.accounts
+            .map { account in
+                AccountSummary(
+                    id: account.id,
+                    label: account.label,
+                    email: account.email,
+                    accountID: account.accountID,
+                    planType: account.planType,
+                    teamName: account.teamName,
+                    usage: account.usage,
+                    isCurrent: account.accountID == currentAccountID
+                )
+            }
+            .sorted { left, right in
+                if left.isCurrent != right.isCurrent {
+                    return left.isCurrent
+                }
+                return left.displayName.localizedCaseInsensitiveCompare(right.displayName) == .orderedAscending
+            }
+    }
+}
+
+struct RefreshedAccountUsage {
+    var authJSON: JSONValue
+    var usage: AccountUsage
+    var planType: String?
+}
+
+final class ChatGPTUsageService: @unchecked Sendable {
+    private enum Configuration {
+        static let baseURL = URL(string: "https://chatgpt.com")!
+        static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+    }
+
+    private let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func refreshAccount(from authJSON: JSONValue) async throws -> RefreshedAccountUsage {
+        let payload = try AuthPayload(authJSON: authJSON)
+
+        do {
+            return try await fetchUsage(payload: payload, authJSON: authJSON)
+        } catch let error as UsageRequestError where error.isUnauthorized {
+            let refreshedTokens = try await refreshTokens(using: payload)
+            let refreshedAuthJSON = try merge(authJSON: authJSON, with: refreshedTokens)
+            let refreshedPayload = try AuthPayload(authJSON: refreshedAuthJSON)
+            return try await fetchUsage(payload: refreshedPayload, authJSON: refreshedAuthJSON)
+        }
+    }
+
+    private func fetchUsage(payload: AuthPayload, authJSON: JSONValue) async throws -> RefreshedAccountUsage {
+        var request = URLRequest(url: Self.endpointURL("/backend-api/wham/usage"))
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(payload.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let accountID = payload.accountID, !accountID.isEmpty {
+            request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
+        }
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CLIError("Failed to refresh account usage.")
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw UsageRequestError(statusCode: httpResponse.statusCode, responseData: data)
+        }
+
+        let responsePayload = try JSONDecoder().decode(ChatGPTUsageResponse.self, from: data)
+        let usage = mapUsage(from: responsePayload)
+        return RefreshedAccountUsage(authJSON: authJSON, usage: usage, planType: responsePayload.planType)
+    }
+
+    private func refreshTokens(using payload: AuthPayload) async throws -> RefreshedTokenResponse {
+        var request = URLRequest(url: Self.authEndpointURL("/oauth/token"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Self.formEncodedBody([
+            ("grant_type", "refresh_token"),
+            ("client_id", Configuration.clientID),
+            ("refresh_token", payload.refreshToken)
+        ])
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CLIError("Failed to refresh ChatGPT access token.")
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let body = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let detail = body.isEmpty ? "HTTP \(httpResponse.statusCode)" : String(body.prefix(200))
+            throw CLIError("Failed to refresh ChatGPT access token: \(detail)")
+        }
+
+        return try JSONDecoder().decode(RefreshedTokenResponse.self, from: data)
+    }
+
+    private func merge(authJSON: JSONValue, with refreshedTokens: RefreshedTokenResponse) throws -> JSONValue {
+        guard var root = authJSON.objectValue else {
+            throw CLIError("Auth JSON has an unsupported structure.")
+        }
+
+        var tokens = root["tokens"]?.objectValue ?? [:]
+        tokens["access_token"] = .string(refreshedTokens.accessToken)
+
+        if let refreshToken = refreshedTokens.refreshToken, !refreshToken.isEmpty {
+            tokens["refresh_token"] = .string(refreshToken)
+        }
+
+        if let idToken = refreshedTokens.idToken, !idToken.isEmpty {
+            tokens["id_token"] = .string(idToken)
+        }
+
+        root["tokens"] = .object(tokens)
+        root["last_refresh"] = .string(Self.isoTimestamp(from: Date()))
+        return .object(root)
+    }
+
+    private func mapUsage(from response: ChatGPTUsageResponse) -> AccountUsage {
+        let windows = [
+            response.rateLimit?.primaryWindow,
+            response.rateLimit?.secondaryWindow
+        ].compactMap { $0 }
+
+        var fiveHour: UsageWindow?
+        var oneWeek: UsageWindow?
+
+        for window in windows {
+            let mappedWindow = UsageWindow(
+                resetAt: window.resetAt,
+                usedPercent: window.usedPercent,
+                windowSeconds: window.limitWindowSeconds
+            )
+
+            switch window.limitWindowSeconds ?? 0 {
+            case ..<86_400:
+                fiveHour = mappedWindow
+            case 604_800:
+                oneWeek = mappedWindow
+            default:
+                if oneWeek == nil {
+                    oneWeek = mappedWindow
+                }
+            }
+        }
+
+        return AccountUsage(
+            credits: UsageCredits(
+                hasCredits: response.credits?.hasCredits,
+                unlimited: response.credits?.unlimited
+            ),
+            fetchedAt: Int64(Date().timeIntervalSince1970),
+            fiveHour: fiveHour,
+            oneWeek: oneWeek,
+            planType: response.planType
+        )
+    }
+
+    private static func endpointURL(_ path: String) -> URL {
+        URL(string: path, relativeTo: Configuration.baseURL)?.absoluteURL ?? Configuration.baseURL
+    }
+
+    private static func authEndpointURL(_ path: String) -> URL {
+        URL(string: "https://auth.openai.com\(path)") ?? Configuration.baseURL
+    }
+
+    private static func formEncodedBody(_ items: [(String, String)]) -> Data {
+        let encoded = items
+            .map { key, value in
+                "\(percentEncode(key))=\(percentEncode(value))"
+            }
+            .joined(separator: "&")
+        return Data(encoded.utf8)
+    }
+
+    private static func percentEncode(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? value
+    }
+
+    private static func isoTimestamp(from date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+}
+
+private struct AuthPayload {
+    var accessToken: String
+    var refreshToken: String
+    var accountID: String?
+
+    init(authJSON: JSONValue) throws {
+        guard let tokens = authJSON["tokens"]?.objectValue else {
+            throw CLIError("Auth file does not contain token information.")
+        }
+
+        guard let accessToken = tokens["access_token"]?.stringValue, !accessToken.isEmpty else {
+            throw CLIError("Auth file is missing access_token.")
+        }
+
+        guard let refreshToken = tokens["refresh_token"]?.stringValue, !refreshToken.isEmpty else {
+            throw CLIError("Auth file is missing refresh_token.")
+        }
+
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.accountID = tokens["account_id"]?.stringValue
+    }
+}
+
+private struct UsageRequestError: Error {
+    var statusCode: Int
+    var responseData: Data
+
+    var isUnauthorized: Bool {
+        statusCode == 401 || statusCode == 403
+    }
+}
+
+private struct ChatGPTUsageResponse: Decodable {
+    var planType: String?
+    var rateLimit: ChatGPTUsageLimitGroup?
+    var credits: ChatGPTUsageCredits?
+
+    enum CodingKeys: String, CodingKey {
+        case planType = "plan_type"
+        case rateLimit = "rate_limit"
+        case credits
+    }
+}
+
+private struct ChatGPTUsageLimitGroup: Decodable {
+    var primaryWindow: ChatGPTUsageWindow?
+    var secondaryWindow: ChatGPTUsageWindow?
+
+    enum CodingKeys: String, CodingKey {
+        case primaryWindow = "primary_window"
+        case secondaryWindow = "secondary_window"
+    }
+}
+
+private struct ChatGPTUsageWindow: Decodable {
+    var resetAt: Int64?
+    var usedPercent: Double?
+    var limitWindowSeconds: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case resetAt = "reset_at"
+        case usedPercent = "used_percent"
+        case limitWindowSeconds = "limit_window_seconds"
+    }
+}
+
+private struct ChatGPTUsageCredits: Decodable {
+    var hasCredits: Bool?
+    var unlimited: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case hasCredits = "has_credits"
+        case unlimited
+    }
+}
+
+private struct RefreshedTokenResponse: Decodable {
+    var accessToken: String
+    var refreshToken: String?
+    var idToken: String?
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case idToken = "id_token"
     }
 }

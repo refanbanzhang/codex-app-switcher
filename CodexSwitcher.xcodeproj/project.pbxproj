@@ -15,6 +15,7 @@
 		A10000000000000000000016 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* JSONValue.swift */; };
 		A10000000000000000000017 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000027 /* Models.swift */; };
 		A10000000000000000000018 /* StoreRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* StoreRepository.swift */; };
+		A10000000000000000000019 /* CodexAppController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029 /* CodexAppController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,6 +27,7 @@
 		A10000000000000000000026 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
 		A10000000000000000000027 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		A10000000000000000000028 /* StoreRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreRepository.swift; sourceTree = "<group>"; };
+		A10000000000000000000029 /* CodexAppController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAppController.swift; sourceTree = "<group>"; };
 		A10000000000000000000031 /* CodexSwitcher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodexSwitcher.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -58,6 +60,7 @@
 				A10000000000000000000023 /* AuthRepository.swift */,
 				A10000000000000000000024 /* CLI.swift */,
 				A10000000000000000000025 /* CodexSwitcherApp.swift */,
+				A10000000000000000000029 /* CodexAppController.swift */,
 				A10000000000000000000026 /* JSONValue.swift */,
 				A10000000000000000000027 /* Models.swift */,
 				A10000000000000000000028 /* StoreRepository.swift */,
@@ -144,6 +147,7 @@
 				A10000000000000000000013 /* AuthRepository.swift in Sources */,
 				A10000000000000000000014 /* CLI.swift in Sources */,
 				A10000000000000000000015 /* CodexSwitcherApp.swift in Sources */,
+				A10000000000000000000019 /* CodexAppController.swift in Sources */,
 				A10000000000000000000016 /* JSONValue.swift in Sources */,
 				A10000000000000000000017 /* Models.swift in Sources */,
 				A10000000000000000000018 /* StoreRepository.swift in Sources */,

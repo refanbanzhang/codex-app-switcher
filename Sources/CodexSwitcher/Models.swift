@@ -73,6 +73,13 @@ struct ExtractedAuth {
     var email: String?
 }
 
+struct ChatGPTOAuthTokens {
+    var accessToken: String
+    var refreshToken: String
+    var idToken: String
+    var apiKey: String?
+}
+
 struct AccountUsage: Codable {
     var credits: UsageCredits?
     var fetchedAt: Int64?

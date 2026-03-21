@@ -7,7 +7,13 @@ struct CLI {
         let paths = try AppPaths.live()
         let authRepository = AuthRepository(paths: paths)
         let storeRepository = StoreRepository(paths: paths)
-        self.accountService = AccountService(authRepository: authRepository, storeRepository: storeRepository)
+        let loginService = OpenAIChatGPTOAuthLoginService(configPath: paths.codexConfigPath)
+        self.accountService = AccountService(
+            authRepository: authRepository,
+            storeRepository: storeRepository,
+            loginService: loginService,
+            usageService: ChatGPTUsageService()
+        )
     }
 
     func run(arguments: [String]) throws {
@@ -32,6 +38,13 @@ struct CLI {
             }
             let summary = try accountService.switchAccount(identifier: identifier)
             print("Switched to \(summary.displayName) [\(summary.accountID)]")
+        case "delete":
+            let remaining = Array(arguments.dropFirst())
+            guard let identifier = remaining.first else {
+                throw CLIError("Missing account identifier. Use store ID or account ID.")
+            }
+            let summary = try accountService.deleteAccount(identifier: identifier)
+            print("Deleted \(summary.displayName) [\(summary.accountID)]")
         case "help", "--help", "-h":
             print(Self.helpText)
         default:
@@ -76,11 +89,13 @@ struct CLI {
       list
       current
       switch IDENTIFIER
+      delete IDENTIFIER
 
     Notes:
       - Accounts are read from Copool: ~/Library/Application Support/CodexToolsSwift/accounts.json
       - Current Codex auth is read from and written to ~/.codex/auth.json
       - switch also updates currentSelection in the Copool store
+      - delete removes the saved account from the Copool store
       - IDENTIFIER can be the stored account id or the ChatGPT account id
     """
 }
