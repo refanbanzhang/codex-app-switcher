@@ -7,23 +7,34 @@ cd "$ROOT_DIR"
 PRODUCT_NAME="codex-app-switcher"
 APP_NAME="codex-app-switcher.app"
 APP_DIR="$ROOT_DIR/dist/$APP_NAME"
+swift build -c release
 BIN_DIR="$(swift build -c release --show-bin-path)"
 BIN_PATH="$BIN_DIR/$PRODUCT_NAME"
-ICON_PATH="$ROOT_DIR/assets/AppIcon.icns"
+ICONSET_DIR="$ROOT_DIR/Sources/CodexAppSwitcher/Assets.xcassets/AppIcon.appiconset"
+TEMP_DIR="$(mktemp -d)"
+TEMP_ICONSET_DIR="$TEMP_DIR/AppIcon.iconset"
 BUILD_VERSION="$(date +%Y%m%d%H%M%S)"
 
-if [[ ! -f "$ICON_PATH" ]]; then
-  echo "Missing icon file: $ICON_PATH" >&2
+cleanup() {
+  rm -rf "$TEMP_DIR"
+}
+
+trap cleanup EXIT
+
+if [[ ! -d "$ICONSET_DIR" ]]; then
+  echo "Missing icon set directory: $ICONSET_DIR" >&2
   exit 1
 fi
 
 rm -rf "$APP_DIR"
 rm -f "$ROOT_DIR/dist/$PRODUCT_NAME"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+mkdir -p "$TEMP_ICONSET_DIR"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$PRODUCT_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$PRODUCT_NAME"
-cp "$ICON_PATH" "$APP_DIR/Contents/Resources/AppIcon.icns"
+cp "$ICONSET_DIR"/*.png "$TEMP_ICONSET_DIR/"
+iconutil -c icns "$TEMP_ICONSET_DIR" -o "$APP_DIR/Contents/Resources/AppIcon.icns"
 
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
