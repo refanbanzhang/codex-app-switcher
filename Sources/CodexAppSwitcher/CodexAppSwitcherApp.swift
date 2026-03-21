@@ -61,6 +61,12 @@ private enum AppTheme: String {
     }
 }
 
+private enum PreviewSupport {
+    static var isRunning: Bool {
+        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
+}
+
 private struct AppCopy {
     let language: AppLanguage
 
@@ -477,7 +483,7 @@ fileprivate enum AppNotice {
 
 @main
 struct CodexAppSwitcherApp: App {
-    @StateObject private var model = AccountSwitcherViewModel()
+    @StateObject private var model = AccountSwitcherViewModel(previewMode: PreviewSupport.isRunning)
     @AppStorage(AppTheme.storageKey) private var storedTheme = AppTheme.light.rawValue
 
     private var selectedTheme: AppTheme {
@@ -514,6 +520,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published fileprivate var notice: AppNotice?
 
+    let isPreviewMode: Bool
     private let accountService: AccountService
     private let codexAppController = CodexAppController()
     private var bannerDismissTask: Task<Void, Never>?
@@ -521,7 +528,32 @@ final class AccountSwitcherViewModel: ObservableObject {
     private var isUsageRefreshInFlight = false
     private var loadGeneration: UInt64 = 0
 
-    init() {
+    init(previewMode: Bool = false) {
+        self.isPreviewMode = previewMode
+
+        if previewMode {
+            self.accountService = AccountService(
+                authRepository: AuthRepository(paths: AppPaths(
+                    appSupportDirectory: URL(fileURLWithPath: "/"),
+                    accountStorePath: URL(fileURLWithPath: "/"),
+                    codexAuthPath: URL(fileURLWithPath: "/"),
+                    codexConfigPath: URL(fileURLWithPath: "/"),
+                    authBackupDirectory: URL(fileURLWithPath: "/")
+                )),
+                storeRepository: StoreRepository(paths: AppPaths(
+                    appSupportDirectory: URL(fileURLWithPath: "/"),
+                    accountStorePath: URL(fileURLWithPath: "/"),
+                    codexAuthPath: URL(fileURLWithPath: "/"),
+                    codexConfigPath: URL(fileURLWithPath: "/"),
+                    authBackupDirectory: URL(fileURLWithPath: "/")
+                )),
+                loginService: OpenAIChatGPTOAuthLoginService(configPath: URL(fileURLWithPath: "/")),
+                usageService: ChatGPTUsageService()
+            )
+            self.accounts = Self.previewAccounts
+            return
+        }
+
         do {
             let paths = try AppPaths.live()
             let authRepository = AuthRepository(paths: paths)
@@ -563,6 +595,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func startUsageAutoRefreshIfNeeded() {
+        guard !isPreviewMode else { return }
         guard usageAutoRefreshTask == nil else { return }
 
         usageAutoRefreshTask = Task { [weak self] in
@@ -578,6 +611,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func load(preserveNotice: Bool = false) async {
+        guard !isPreviewMode else { return }
         loadGeneration &+= 1
         let generation = loadGeneration
         isLoading = true
@@ -804,6 +838,39 @@ final class AccountSwitcherViewModel: ObservableObject {
             }
         }
     }
+
+    private static var previewAccounts: [AccountSummary] {
+        [
+            AccountSummary(
+                id: "preview-current",
+                label: "Primary Workspace",
+                email: "studio-owner@example.com",
+                accountID: "acct_preview_current",
+                planType: "Plus",
+                teamName: "Studio",
+                usage: AccountUsage(
+                    fiveHour: UsageWindow(resetAt: Int64(Date().addingTimeInterval(90 * 60).timeIntervalSince1970), usedPercent: 28),
+                    oneWeek: UsageWindow(resetAt: Int64(Date().addingTimeInterval(3 * 24 * 60 * 60).timeIntervalSince1970), usedPercent: 54),
+                    planType: "Plus"
+                ),
+                isCurrent: true
+            ),
+            AccountSummary(
+                id: "preview-secondary",
+                label: "Client Sandbox",
+                email: "client-sandbox@example.com",
+                accountID: "acct_preview_secondary",
+                planType: "Team",
+                teamName: "Acme",
+                usage: AccountUsage(
+                    fiveHour: UsageWindow(resetAt: Int64(Date().addingTimeInterval(2 * 60 * 60).timeIntervalSince1970), usedPercent: 67),
+                    oneWeek: UsageWindow(resetAt: Int64(Date().addingTimeInterval(5 * 24 * 60 * 60).timeIntervalSince1970), usedPercent: 21),
+                    planType: "Team"
+                ),
+                isCurrent: false
+            )
+        ]
+    }
 }
 
 struct ContentView: View {
@@ -895,6 +962,7 @@ struct ContentView: View {
             }
         }
         .task {
+            guard !model.isPreviewMode else { return }
             model.startUsageAutoRefreshIfNeeded()
             await model.load()
         }
@@ -1966,6 +2034,6 @@ private func usageTimeFormatter(for language: AppLanguage) -> DateFormatter {
 }
 
 #Preview("codex-app-switcher") {
-    ContentView(model: AccountSwitcherViewModel())
+    ContentView(model: AccountSwitcherViewModel(previewMode: true))
         .frame(width: CodexAppSwitcherLayout.columnWidth, height: 760)
 }
