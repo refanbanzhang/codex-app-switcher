@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 /// 主窗口与 sheet 共用列宽，避免弹层比窗口更宽。
 private enum CodexAppSwitcherLayout {
-    static let columnWidth: CGFloat = 390
+    static let columnWidth: CGFloat = 370
 }
 
 private enum AppLanguage: String {
@@ -487,7 +487,7 @@ struct CodexAppSwitcherApp: App {
     var body: some Scene {
         WindowGroup("codex-app-switcher") {
             ContentView(model: model)
-                .frame(minWidth: CodexAppSwitcherLayout.columnWidth, idealWidth: CodexAppSwitcherLayout.columnWidth, maxWidth: 430, minHeight: 760)
+                .frame(minWidth: CodexAppSwitcherLayout.columnWidth, idealWidth: CodexAppSwitcherLayout.columnWidth, maxWidth: 410, minHeight: 760)
                 .preferredColorScheme(selectedTheme.colorScheme)
         }
         .windowResizability(.contentSize)
@@ -818,6 +818,9 @@ struct ContentView: View {
         ZStack {
             StudioBackground()
 
+            WindowChromeConfigurator(theme: selectedTheme)
+                .frame(width: 0, height: 0)
+
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 16) {
                     HStack(spacing: 8) {
@@ -963,6 +966,37 @@ struct ContentView: View {
         )
         .fixedSize(horizontal: true, vertical: false)
         .layoutPriority(1)
+    }
+}
+
+private struct WindowChromeConfigurator: NSViewRepresentable {
+    let theme: AppTheme
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            configureWindow(from: view)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            configureWindow(from: nsView)
+        }
+    }
+
+    private func configureWindow(from view: NSView) {
+        guard let window = view.window else {
+            return
+        }
+
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isOpaque = false
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = StudioTheme.windowChromeColor(for: theme)
+        window.appearance = NSAppearance(named: theme == .dark ? .darkAqua : .aqua)
     }
 }
 
@@ -1220,6 +1254,9 @@ private struct AccountCard: View {
     let isDeleting: Bool
     let onSwitch: () -> Void
     let onDelete: () -> Void
+    @State private var revealsFullEmail = false
+    @State private var isSwitchButtonHovered = false
+    @State private var isCurrentPillHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1231,6 +1268,10 @@ private struct AccountCard: View {
                         .fontWeight(account.isCurrent ? .bold : .semibold)
                         .tracking(0.6)
                         .lineLimit(1)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) {
+                            revealsFullEmail.toggle()
+                        }
 
                     HStack(spacing: 8) {
                         if let planType = account.effectivePlanType, !planType.isEmpty {
@@ -1264,11 +1305,17 @@ private struct AccountCard: View {
                                 Image(systemName: "arrow.left.arrow.right")
                                     .font(.system(size: 11, weight: .semibold))
                             }
-                            Text(copy.switchAction)
-                                .font(StudioFont.label(10))
+
+                            if isSwitchButtonHovered {
+                                Text(copy.switchAction)
+                                    .font(StudioFont.label(10))
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                            }
                         }
                         .foregroundStyle(StudioTheme.ink)
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, isSwitchButtonHovered ? 12 : 10)
                         .padding(.vertical, 8)
                         .background(
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1281,6 +1328,11 @@ private struct AccountCard: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(isSwitching || isDeleting)
+                    .onHover { hovering in
+                        isSwitchButtonHovered = hovering && !isSwitching && !isDeleting
+                    }
+                    .help(copy.switchAction)
+                    .animation(.easeOut(duration: 0.16), value: isSwitchButtonHovered)
                 }
             }
 
@@ -1313,7 +1365,13 @@ private struct AccountCard: View {
     }
 
     private var emailLine: String {
-        (account.maskedEmail ?? account.maskedDisplayName).uppercased()
+        let value: String
+        if revealsFullEmail {
+            value = account.email ?? account.displayName
+        } else {
+            value = account.maskedEmail ?? account.maskedDisplayName
+        }
+        return value.uppercased()
     }
 
     private var currentContextPill: some View {
@@ -1321,10 +1379,15 @@ private struct AccountCard: View {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(StudioTheme.ink)
-            Text(currentPillTitle)
-                .font(StudioFont.label(10))
-                .foregroundStyle(StudioTheme.ink)
-                .lineLimit(1)
+
+            if isCurrentPillHovered {
+                Text(currentPillTitle)
+                    .font(StudioFont.label(10))
+                    .foregroundStyle(StudioTheme.ink)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -1334,6 +1397,11 @@ private struct AccountCard: View {
                 .stroke(StudioTheme.currentAccountBorder.opacity(0.55), lineWidth: 1)
         )
         .frame(maxWidth: 120, alignment: .trailing)
+        .onHover { hovering in
+            isCurrentPillHovered = hovering
+        }
+        .help(currentPillTitle)
+        .animation(.easeOut(duration: 0.16), value: isCurrentPillHovered)
     }
 
     private var currentPillTitle: String {
@@ -1699,15 +1767,20 @@ private struct FooterUtilityCapsuleLabel: View {
     let title: String
     let tint: Color
     var isDisabled: Bool = false
+    @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: isHovered ? 6 : 0) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
-            Text(title)
-                .font(StudioFont.label(10))
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+
+            if isHovered {
+                Text(title)
+                    .font(StudioFont.label(10))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .foregroundStyle(isDisabled ? tint.opacity(0.45) : tint)
         .padding(.horizontal, 10)
@@ -1720,6 +1793,11 @@ private struct FooterUtilityCapsuleLabel: View {
             Capsule()
                 .stroke(StudioTheme.outlineVariant.opacity(isDisabled ? 0.08 : 0.14), lineWidth: 1)
         )
+        .onHover { hovering in
+            isHovered = hovering && !isDisabled
+        }
+        .help(title)
+        .animation(.easeOut(duration: 0.16), value: isHovered)
     }
 }
 
@@ -1841,6 +1919,15 @@ private enum StudioTheme {
                 }
             )
         )
+    }
+
+    static func windowChromeColor(for theme: AppTheme) -> NSColor {
+        switch theme {
+        case .light:
+            return NSColor(calibratedRed: 0.984, green: 0.973, blue: 0.988, alpha: 1.0)
+        case .dark:
+            return NSColor(calibratedRed: 0.090, green: 0.102, blue: 0.129, alpha: 1.0)
+        }
     }
 }
 
