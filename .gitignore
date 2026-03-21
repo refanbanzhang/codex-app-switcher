@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager
+.build/
+
+# Xcode
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+**/xcuserdata/**
+
+# Build products (local)
+*.ipa
+*.dSYM.zip
+
+# Env / secrets
+.env
+.env.*
