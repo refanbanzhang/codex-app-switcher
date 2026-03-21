@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+staged_files="$(git diff --cached --name-only --diff-filter=ACMR)"
+if [ -z "${staged_files}" ]; then
+  exit 0
+fi
+
+path_hits=()
+content_hits=()
+
+# File paths that are almost always sensitive when committed.
+SENSITIVE_PATH_REGEX='(^|/)(\.env($|\.)|.*\.(pem|key|p12|pfx)$|id_rsa|id_dsa|\.npmrc$|\.netrc$|auth\.json$|accounts\.json$|codex-accounts-export-.*\.json$|auth-backups/)'
+
+# Token / secret patterns with high confidence.
+SECRET_PATTERNS=(
+  'AKIA[0-9A-Z]{16}'
+  'ASIA[0-9A-Z]{16}'
+  'ghp_[A-Za-z0-9]{36}'
+  'github_pat_[A-Za-z0-9_]{20,}'
+  'sk-[A-Za-z0-9]{20,}'
+  'AIza[0-9A-Za-z_-]{35}'
+  'xox[baprs]-[A-Za-z0-9-]+'
+  '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+  '"(access_token|refresh_token|id_token|OPENAI_API_KEY)"[[:space:]]*:[[:space:]]*"[^"]{20,}"'
+)
+
+for file in ${staged_files}; do
+  if echo "${file}" | grep -Eiq "${SENSITIVE_PATH_REGEX}"; then
+    path_hits+=("${file}")
+    continue
+  fi
+
+  if ! git cat-file -e ":${file}" 2>/dev/null; then
+    continue
+  fi
+
+  # Skip likely-binary blobs.
+  if git diff --cached --numstat -- "${file}" | awk '{print $1}' | grep -q '^-'; then
+    continue
+  fi
+
+  staged_content="$(git show ":${file}" 2>/dev/null || true)"
+  if [ -z "${staged_content}" ]; then
+    continue
+  fi
+
+  for pattern in "${SECRET_PATTERNS[@]}"; do
+    if printf '%s\n' "${staged_content}" | grep -Eq "${pattern}"; then
+      content_hits+=("${file} (pattern: ${pattern})")
+      break
+    fi
+  done
+done
+
+if [ "${#path_hits[@]}" -eq 0 ] && [ "${#content_hits[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+echo "ERROR: Potential sensitive data detected in staged changes."
+
+if [ "${#path_hits[@]}" -gt 0 ]; then
+  echo
+  echo "Sensitive file paths:"
+  for hit in "${path_hits[@]}"; do
+    echo "  - ${hit}"
+  done
+fi
+
+if [ "${#content_hits[@]}" -gt 0 ]; then
+  echo
+  echo "Sensitive content matches:"
+  for hit in "${content_hits[@]}"; do
+    echo "  - ${hit}"
+  done
+fi
+
+echo
+echo "Fix options:"
+echo "  1) Remove files from commit: git restore --staged <file>"
+echo "  2) Add ignore rules in .gitignore if needed"
+echo "  3) If this is intentional and safe, bypass once: git commit --no-verify"
+exit 1

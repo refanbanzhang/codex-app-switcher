@@ -18,3 +18,13 @@ dist/
 # Env / secrets
 .env
 .env.*
+
+# Local auth / export artifacts (do not commit)
+auth.json
+accounts.json
+auth-backups/
+codex-accounts-export-*.json
+*.pem
+*.key
+*.p12
+*.pfx

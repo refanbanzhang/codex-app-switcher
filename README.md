@@ -21,3 +21,17 @@
 ```bash
 open ./dist/codex-app-switcher.app
 ```
+
+## 隐私保护（推荐）
+
+安装仓库内置的 `pre-commit` 扫描钩子（会在提交前检查常见密钥和敏感文件名）：
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+如果钩子拦截了提交，可先把可疑文件移出暂存区再提交：
+
+```bash
+git restore --staged <file>
+```
