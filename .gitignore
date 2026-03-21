@@ -13,6 +13,7 @@ DerivedData/
 # Build products (local)
 *.ipa
 *.dSYM.zip
+dist/
 
 # Env / secrets
 .env
