@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 主窗口与 sheet 共用列宽，避免弹层比窗口更宽。
 private enum CodexSwitcherLayout {
@@ -153,7 +154,7 @@ private struct AppCopy {
     var addAccountAction: String {
         switch language {
         case .chinese:
-            return "登录新增账号"
+            return "登录新账号"
         case .english:
             return "Add Account"
         }
@@ -168,12 +169,57 @@ private struct AppCopy {
         }
     }
 
-    var reloadAction: String {
+    var exportAccountsAction: String {
         switch language {
         case .chinese:
-            return "重新加载"
+            return "导出账号JSON"
         case .english:
-            return "Reload"
+            return "Export JSON"
+        }
+    }
+
+    var exportingAccountsAction: String {
+        switch language {
+        case .chinese:
+            return "导出中…"
+        case .english:
+            return "Exporting…"
+        }
+    }
+
+    var importAccountsAction: String {
+        switch language {
+        case .chinese:
+            return "导入账号JSON"
+        case .english:
+            return "Import JSON"
+        }
+    }
+
+    var importingAccountsAction: String {
+        switch language {
+        case .chinese:
+            return "导入中…"
+        case .english:
+            return "Importing…"
+        }
+    }
+
+    func exportedAccounts(accountCount: Int, outputPath: String) -> String {
+        switch language {
+        case .chinese:
+            return "已导出 \(accountCount) 个账号到 \(outputPath)"
+        case .english:
+            return "Exported \(accountCount) account(s) to \(outputPath)"
+        }
+    }
+
+    func importedAccounts(totalCount: Int, addedCount: Int, updatedCount: Int) -> String {
+        switch language {
+        case .chinese:
+            return "已导入 \(totalCount) 个账号（新增 \(addedCount)，更新 \(updatedCount)）"
+        case .english:
+            return "Imported \(totalCount) account(s): +\(addedCount) new, \(updatedCount) updated"
         }
     }
 
@@ -250,39 +296,21 @@ private struct AppCopy {
         }
     }
 
-    var oneWeekWindow: String {
+    var fiveHourUsageSection: String {
         switch language {
         case .chinese:
-            return "1 周窗口"
+            return "5 小时"
         case .english:
-            return "1 week window"
+            return "5 Hours"
         }
     }
 
-    var fiveHourWindow: String {
+    var oneWeekUsageSection: String {
         switch language {
         case .chinese:
-            return "5 小时窗口"
+            return "1 周"
         case .english:
-            return "5 hour window"
-        }
-    }
-
-    var primaryUsageSection: String {
-        switch language {
-        case .chinese:
-            return "资源用量"
-        case .english:
-            return "Resources Usage"
-        }
-    }
-
-    var secondaryUsageSection: String {
-        switch language {
-        case .chinese:
-            return "次级窗口用量"
-        case .english:
-            return "Usage (secondary)"
+            return "1 Week"
         }
     }
 
@@ -365,6 +393,15 @@ private struct AppCopy {
             return "Light"
         }
     }
+
+    var settingsMenuLabel: String {
+        switch language {
+        case .chinese:
+            return "设置"
+        case .english:
+            return "Settings"
+        }
+    }
 }
 
 fileprivate enum AppNotice {
@@ -372,6 +409,8 @@ fileprivate enum AppNotice {
     case switched(String)
     case added(String)
     case deleted(String)
+    case exported(accountCount: Int, outputPath: String)
+    case imported(totalCount: Int, addedCount: Int, updatedCount: Int)
 
     func localized(using copy: AppCopy) -> String {
         switch self {
@@ -383,6 +422,10 @@ fileprivate enum AppNotice {
             return copy.addedAccount(name)
         case .deleted(let name):
             return copy.deletedAccount(name)
+        case .exported(let accountCount, let outputPath):
+            return copy.exportedAccounts(accountCount: accountCount, outputPath: outputPath)
+        case .imported(let totalCount, let addedCount, let updatedCount):
+            return copy.importedAccounts(totalCount: totalCount, addedCount: addedCount, updatedCount: updatedCount)
         }
     }
 }
@@ -408,9 +451,16 @@ struct CodexSwitcherApp: App {
 
 @MainActor
 final class AccountSwitcherViewModel: ObservableObject {
+    private enum BackgroundUsageRefreshPolicy {
+        static let initialDelay: Duration = .milliseconds(700)
+        static let usageRefreshInterval: Duration = .seconds(30)
+    }
+
     @Published var accounts: [AccountSummary] = []
     @Published var isLoading = false
     @Published var isLoggingIn = false
+    @Published var isExporting = false
+    @Published var isImporting = false
     @Published var switchingAccountID: String?
     @Published var deletingAccountID: String?
     @Published var pendingDeletionAccount: AccountSummary?
@@ -419,6 +469,9 @@ final class AccountSwitcherViewModel: ObservableObject {
 
     private let accountService: AccountService
     private let codexAppController = CodexAppController()
+    private var bannerDismissTask: Task<Void, Never>?
+    private var usageAutoRefreshTask: Task<Void, Never>?
+    private var isUsageRefreshInFlight = false
 
     init() {
         do {
@@ -452,27 +505,106 @@ final class AccountSwitcherViewModel: ObservableObject {
                 usageService: ChatGPTUsageService()
             )
             self.errorMessage = error.localizedDescription
+            scheduleBannerDismissal()
         }
     }
 
+    deinit {
+        bannerDismissTask?.cancel()
+        usageAutoRefreshTask?.cancel()
+    }
+
+    func startUsageAutoRefreshIfNeeded() {
+        guard usageAutoRefreshTask == nil else { return }
+
+        usageAutoRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: BackgroundUsageRefreshPolicy.initialDelay)
+
+            while !Task.isCancelled {
+                try? await Task.sleep(for: BackgroundUsageRefreshPolicy.usageRefreshInterval)
+                guard !Task.isCancelled else { return }
+                await self.runAutomaticUsageRefreshTick()
+            }
+        }
+    }
+
+    func stopUsageAutoRefresh() {
+        usageAutoRefreshTask?.cancel()
+        usageAutoRefreshTask = nil
+    }
+
     func load(preserveNotice: Bool = false) async {
+        guard !isUsageRefreshInFlight else { return }
+        isUsageRefreshInFlight = true
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            isUsageRefreshInFlight = false
+        }
 
         do {
             try accountService.syncCurrentAuthAccountOnStartup()
-            accounts = try await accountService.refreshUsageForAllAccounts()
+            accounts = sortAccounts(try await accountService.refreshUsageForAllAccounts())
             if !preserveNotice {
                 if accounts.isEmpty {
-                    notice = .emptyAccounts
+                    showNotice(.emptyAccounts)
                 } else {
-                    notice = nil
+                    clearBanner()
                 }
             }
             errorMessage = nil
         } catch {
             accounts = []
-            errorMessage = error.localizedDescription
+            showError(error.localizedDescription)
+        }
+    }
+
+    private var canRunAutomaticUsageRefresh: Bool {
+        !isUsageRefreshInFlight
+            && !isLoading
+            && !isLoggingIn
+            && !isExporting
+            && !isImporting
+            && switchingAccountID == nil
+            && deletingAccountID == nil
+    }
+
+    private func runAutomaticUsageRefreshTick() async {
+        guard canRunAutomaticUsageRefresh else { return }
+
+        isUsageRefreshInFlight = true
+        defer { isUsageRefreshInFlight = false }
+
+        do {
+            try accountService.syncCurrentAuthAccountOnStartup()
+            accounts = sortAccounts(try await accountService.refreshUsageForAllAccounts())
+        } catch {
+            // Keep automatic refresh silent; manual actions still surface errors to the user.
+        }
+    }
+
+    private func sortAccounts(_ accounts: [AccountSummary]) -> [AccountSummary] {
+        accounts.sorted { lhs, rhs in
+            let lhsHasUsage = lhs.fiveHourRemainingPercent != nil || lhs.oneWeekRemainingPercent != nil
+            let rhsHasUsage = rhs.fiveHourRemainingPercent != nil || rhs.oneWeekRemainingPercent != nil
+            if lhsHasUsage != rhsHasUsage {
+                return lhsHasUsage && !rhsHasUsage
+            }
+
+            let lhsOneWeek = lhs.oneWeekRemainingPercent ?? -1
+            let rhsOneWeek = rhs.oneWeekRemainingPercent ?? -1
+            if lhsOneWeek != rhsOneWeek {
+                return lhsOneWeek > rhsOneWeek
+            }
+
+            let lhsFiveHour = lhs.fiveHourRemainingPercent ?? -1
+            let rhsFiveHour = rhs.fiveHourRemainingPercent ?? -1
+            if lhsFiveHour != rhsFiveHour {
+                return lhsFiveHour > rhsFiveHour
+            }
+
+            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
         }
     }
 
@@ -483,11 +615,10 @@ final class AccountSwitcherViewModel: ObservableObject {
         do {
             let switched = try accountService.switchAccount(identifier: account.id)
             try await codexAppController.relaunchOrLaunch()
-            notice = .switched(switched.displayName)
-            errorMessage = nil
+            showNotice(.switched(switched.maskedDisplayName))
             await load(preserveNotice: true)
         } catch {
-            errorMessage = error.localizedDescription
+            showError(error.localizedDescription)
         }
     }
 
@@ -497,12 +628,40 @@ final class AccountSwitcherViewModel: ObservableObject {
 
         do {
             let imported = try await accountService.addAccountViaLogin()
-            notice = .added(imported.displayName)
-            errorMessage = nil
+            showNotice(.added(imported.maskedDisplayName))
             await load(preserveNotice: true)
         } catch {
-            errorMessage = error.localizedDescription
+            showError(error.localizedDescription)
         }
+    }
+
+    func exportAccountsJSON() {
+        isExporting = true
+        defer { isExporting = false }
+
+        do {
+            let result = try accountService.exportAccountsJSON()
+            showNotice(.exported(accountCount: result.accountCount, outputPath: result.fileURL.path))
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
+    func importAccountsJSON(from fileURL: URL) async {
+        isImporting = true
+        defer { isImporting = false }
+
+        do {
+            let result = try accountService.importAccountsJSON(from: fileURL)
+            showNotice(.imported(totalCount: result.totalCount, addedCount: result.addedCount, updatedCount: result.updatedCount))
+            await load(preserveNotice: true)
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
+    func showImportPickerError(_ message: String) {
+        showError(message)
     }
 
     func confirmDelete(_ account: AccountSummary) {
@@ -513,22 +672,49 @@ final class AccountSwitcherViewModel: ObservableObject {
         pendingDeletionAccount = nil
     }
 
-    func deletePendingAccount() async {
-        guard let account = pendingDeletionAccount else {
-            return
-        }
-
+    func completeDeletion(of account: AccountSummary) async {
         pendingDeletionAccount = nil
         deletingAccountID = account.id
         defer { deletingAccountID = nil }
 
         do {
             let deleted = try accountService.deleteAccount(identifier: account.id)
-            notice = .deleted(deleted.displayName)
-            errorMessage = nil
+            showNotice(.deleted(deleted.maskedDisplayName))
             await load(preserveNotice: true)
         } catch {
-            errorMessage = error.localizedDescription
+            showError(error.localizedDescription)
+        }
+    }
+
+    private func showNotice(_ notice: AppNotice) {
+        self.notice = notice
+        errorMessage = nil
+        scheduleBannerDismissal()
+    }
+
+    private func showError(_ message: String) {
+        errorMessage = message
+        notice = nil
+        scheduleBannerDismissal()
+    }
+
+    private func clearBanner() {
+        bannerDismissTask?.cancel()
+        bannerDismissTask = nil
+        notice = nil
+        errorMessage = nil
+    }
+
+    private func scheduleBannerDismissal() {
+        bannerDismissTask?.cancel()
+        bannerDismissTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else {
+                return
+            }
+            await MainActor.run {
+                self?.clearBanner()
+            }
         }
     }
 }
@@ -537,6 +723,7 @@ struct ContentView: View {
     @ObservedObject var model: AccountSwitcherViewModel
     @AppStorage(AppLanguage.storageKey) private var storedLanguage = AppLanguage.chinese.rawValue
     @AppStorage(AppTheme.storageKey) private var storedTheme = AppTheme.light.rawValue
+    @State private var isImporterPresented = false
 
     private var language: AppLanguage {
         AppLanguage(rawValue: storedLanguage) ?? .chinese
@@ -550,12 +737,38 @@ struct ContentView: View {
         AppCopy(language: language)
     }
 
+    private var accountActionBusy: Bool {
+        model.isLoggingIn
+            || model.isLoading
+            || model.isExporting
+            || model.isImporting
+            || model.switchingAccountID != nil
+            || model.deletingAccountID != nil
+    }
+
     var body: some View {
         ZStack {
             StudioBackground()
 
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 16) {
+                    HStack(spacing: 8) {
+                        FooterUtilityButton(
+                            icon: "globe",
+                            title: copy.languageButtonLabel,
+                            tint: StudioTheme.ink,
+                            action: { storedLanguage = language.next.rawValue }
+                        )
+                        FooterUtilityButton(
+                            icon: selectedTheme == .light ? "moon.stars" : "sun.max",
+                            title: copy.themeButtonLabel(for: selectedTheme),
+                            tint: StudioTheme.ink,
+                            action: { storedTheme = selectedTheme.next.rawValue }
+                        )
+                        utilitiesMenuButton
+                    }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+
                     banner
 
                     if model.isLoading && model.accounts.isEmpty {
@@ -582,41 +795,54 @@ struct ContentView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 24)
-                .padding(.bottom, 96)
+                .padding(.top, 16)
+                .padding(.bottom, 20)
+                .overlay(alignment: .topLeading) {
+                    ScrollViewOverlayConfigurator()
+                        .frame(width: 0, height: 0)
+                }
             }
-            .scrollIndicators(.hidden)
-
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                stitchFooterBar
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
         .task {
+            model.startUsageAutoRefreshIfNeeded()
             await model.load()
         }
         .alert(
             copy.deleteAccountTitle,
             isPresented: Binding(
                 get: { model.pendingDeletionAccount != nil },
-                set: { isPresented in
-                    if !isPresented {
+                set: { presented in
+                    if !presented {
                         model.cancelDelete()
                     }
                 }
-            )
-        ) {
+            ),
+            presenting: model.pendingDeletionAccount
+        ) { account in
             Button(copy.deleteAction, role: .destructive) {
                 Task {
-                    await model.deletePendingAccount()
+                    await model.completeDeletion(of: account)
                 }
             }
             Button(copy.cancelAction, role: .cancel) {
                 model.cancelDelete()
             }
-        } message: {
-            Text(copy.deleteAccountMessage(accountName: model.pendingDeletionAccount?.displayName))
+        } message: { account in
+            Text(copy.deleteAccountMessage(accountName: account.maskedDisplayName))
+        }
+        .fileImporter(isPresented: $isImporterPresented, allowedContentTypes: [.json]) { result in
+            switch result {
+            case .success(let fileURL):
+                Task {
+                    await model.importAccountsJSON(from: fileURL)
+                }
+            case .failure(let error):
+                let nsError = error as NSError
+                if nsError.code == NSUserCancelledError {
+                    return
+                }
+                model.showImportPickerError(error.localizedDescription)
+            }
         }
     }
 
@@ -632,96 +858,193 @@ struct ContentView: View {
     @ViewBuilder
     private var banner: some View {
         if let message = model.errorMessage {
-            StatusBanner(message: message, icon: "exclamationmark.triangle.fill", tint: StudioTheme.danger)
+            StatusBanner(message: message, icon: "exclamationmark.triangle", tint: StudioTheme.danger)
         } else if let notice = model.notice {
-            StatusBanner(message: notice.localized(using: copy), icon: "checkmark.circle.fill", tint: StudioTheme.success)
+            StatusBanner(message: notice.localized(using: copy), icon: "checkmark.circle", tint: StudioTheme.success)
         }
     }
 
-    private var stitchFooterBar: some View {
-        HStack {
-            Button {
-                Task {
-                    await model.addAccountViaLogin()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "person.badge.plus")
-                        .font(.system(size: 18, weight: .regular))
-                    Text(model.isLoggingIn ? copy.addAccountLoadingAction : copy.addAccountAction)
-                        .font(StudioFont.label(12))
-                }
-                .foregroundStyle(StudioTheme.primary)
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isLoggingIn || model.isLoading || model.switchingAccountID != nil || model.deletingAccountID != nil)
+    private var utilitiesMenuButton: some View {
+        ToolbarSettingsMenuButton(
+            model: model,
+            isImporterPresented: $isImporterPresented,
+            copy: copy,
+            accountActionBusy: accountActionBusy
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
+    }
+}
 
-            Spacer(minLength: 12)
+private struct ToolbarSettingsMenuButton: NSViewRepresentable {
+    @ObservedObject var model: AccountSwitcherViewModel
+    @Binding var isImporterPresented: Bool
+    let copy: AppCopy
+    let accountActionBusy: Bool
 
-            HStack(spacing: 10) {
-                FooterUtilityButton(
-                    icon: "globe",
-                    title: copy.languageButtonLabel,
-                    tint: StudioTheme.footerMuted
-                ) {
-                    storedLanguage = language.next.rawValue
-                }
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
-                FooterUtilityButton(
-                    icon: selectedTheme == .light ? "moon.stars.fill" : "sun.max.fill",
-                    title: copy.themeButtonLabel(for: selectedTheme),
-                    tint: StudioTheme.footerMuted
-                ) {
-                    storedTheme = selectedTheme.next.rawValue
-                }
-            }
-
-            Button {
-                Task {
-                    await model.load()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 18, weight: .regular))
-                    Text(copy.reloadAction)
-                        .font(StudioFont.label(12))
-                }
-                .foregroundStyle(StudioTheme.footerMuted)
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isLoggingIn || model.deletingAccountID != nil)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-        .frame(maxWidth: 430)
-        .frame(maxWidth: .infinity)
-        .background {
-            ZStack(alignment: .top) {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                StudioTheme.footerFill
-            }
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(StudioTheme.footerTopBorder)
-                    .frame(height: 1)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .clipShape(
-            UnevenRoundedRectangle(
-                cornerRadii: RectangleCornerRadii(
-                    topLeading: 16,
-                    bottomLeading: 0,
-                    bottomTrailing: 0,
-                    topTrailing: 16
-                ),
-                style: .continuous
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.parent = self
+        let container = NSView()
+        let hosting = NSHostingView(
+            rootView: FooterUtilityCapsuleLabel(
+                icon: "gearshape",
+                title: copy.settingsMenuLabel,
+                tint: StudioTheme.ink
             )
         )
-        .shadow(color: StudioTheme.footerShadow, radius: 20, x: 0, y: -4)
-        .ignoresSafeArea(edges: .bottom)
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(hosting)
+
+        let button = NSButton()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.bezelStyle = .shadowlessSquare
+        button.isBordered = false
+        button.title = ""
+        button.setButtonType(.momentaryPushIn)
+        button.focusRingType = .none
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.showMenu(_:))
+        button.sendAction(on: [.leftMouseUp])
+        button.menu = context.coordinator.rebuildMenu()
+        container.addSubview(button)
+
+        context.coordinator.hostingView = hosting
+        context.coordinator.button = button
+
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: container.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            button.topAnchor.constraint(equalTo: container.topAnchor),
+            button.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        return container
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.hostingView?.rootView = FooterUtilityCapsuleLabel(
+            icon: "gearshape",
+            title: copy.settingsMenuLabel,
+            tint: StudioTheme.ink
+        )
+        context.coordinator.button?.menu = context.coordinator.rebuildMenu()
+        nsView.invalidateIntrinsicContentSize()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var parent: ToolbarSettingsMenuButton!
+        weak var hostingView: NSHostingView<FooterUtilityCapsuleLabel>?
+        weak var button: NSButton?
+
+        func rebuildMenu() -> NSMenu {
+            let menu = NSMenu()
+            guard let parent else {
+                return menu
+            }
+
+            let loginItem = NSMenuItem(
+                title: parent.model.isLoggingIn ? parent.copy.addAccountLoadingAction : parent.copy.addAccountAction,
+                action: #selector(login),
+                keyEquivalent: ""
+            )
+            loginItem.target = self
+            loginItem.image = NSImage(systemSymbolName: "person.badge.plus", accessibilityDescription: nil)
+            loginItem.isEnabled = !parent.accountActionBusy
+            menu.addItem(loginItem)
+
+            let importItem = NSMenuItem(
+                title: parent.model.isImporting ? parent.copy.importingAccountsAction : parent.copy.importAccountsAction,
+                action: #selector(importJSON),
+                keyEquivalent: ""
+            )
+            importItem.target = self
+            importItem.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: nil)
+            importItem.isEnabled = !parent.accountActionBusy
+            menu.addItem(importItem)
+
+            let exportItem = NSMenuItem(
+                title: parent.model.isExporting ? parent.copy.exportingAccountsAction : parent.copy.exportAccountsAction,
+                action: #selector(exportJSON),
+                keyEquivalent: ""
+            )
+            exportItem.target = self
+            exportItem.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: nil)
+            exportItem.isEnabled = !parent.accountActionBusy
+            menu.addItem(exportItem)
+
+            return menu
+        }
+
+        @objc func login(_ sender: Any?) {
+            Task { @MainActor in
+                await self.parent.model.addAccountViaLogin()
+            }
+        }
+
+        @objc func importJSON(_ sender: Any?) {
+            Task { @MainActor in
+                self.parent.isImporterPresented = true
+            }
+        }
+
+        @objc func exportJSON(_ sender: Any?) {
+            Task { @MainActor in
+                self.parent.model.exportAccountsJSON()
+            }
+        }
+
+        @objc func showMenu(_ sender: NSButton) {
+            guard let menu = sender.menu else { return }
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
+        }
+    }
+}
+
+private struct ScrollViewOverlayConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            configure(from: view)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            configure(from: nsView)
+        }
+    }
+
+    private func configure(from view: NSView) {
+        guard let scrollView = view.enclosingScrollView ?? enclosingScrollView(from: view) else {
+            return
+        }
+        // overlay：滚动条叠在内容侧，不挤占内容区宽度（与 legacy 轨道相反）
+        scrollView.scrollerStyle = .overlay
+        scrollView.autohidesScrollers = true
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+    }
+
+    private func enclosingScrollView(from view: NSView) -> NSScrollView? {
+        var current: NSView? = view
+        while let candidate = current {
+            if let scrollView = candidate as? NSScrollView {
+                return scrollView
+            }
+            current = candidate.superview
+        }
+        return nil
     }
 }
 
@@ -770,31 +1093,14 @@ private enum AccountPlanKind {
             return .planFree
         case .plus:
             return .planPlus
-        case .pro:
-            return .planPro
         case .team:
             return .planTeam
+        case .pro:
+            return .neutral
         case .enterprise:
-            return .planEnterprise
+            return .neutral
         case .unknown:
             return .neutral
-        }
-    }
-
-    var usageAccent: Color {
-        switch self {
-        case .free:
-            return StudioTheme.accentFree
-        case .plus:
-            return StudioTheme.accentPlus
-        case .pro:
-            return StudioTheme.tertiary
-        case .team:
-            return StudioTheme.accentTeamPlan
-        case .enterprise:
-            return StudioTheme.accentEnterprise
-        case .unknown:
-            return StudioTheme.primary
         }
     }
 }
@@ -813,16 +1119,12 @@ private struct AccountCard: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(emailLine)
                         .font(StudioFont.label(11))
-                        .foregroundStyle(account.isCurrent ? StudioTheme.primary : StudioTheme.ink)
+                        .foregroundStyle(StudioTheme.ink)
                         .fontWeight(account.isCurrent ? .bold : .semibold)
                         .tracking(0.6)
                         .lineLimit(1)
 
                     HStack(spacing: 8) {
-                        if account.isCurrent {
-                            StitchChip(text: copy.currentBadge, style: .current)
-                        }
-
                         if let planType = account.effectivePlanType, !planType.isEmpty {
                             StitchChip(
                                 text: planType.uppercased(),
@@ -831,7 +1133,7 @@ private struct AccountCard: View {
                         }
 
                         if let teamName = account.teamName, !teamName.isEmpty {
-                            StitchChip(text: teamName.uppercased(), style: .workspaceTeam)
+                            StitchChip(text: teamName.uppercased(), style: .neutral)
                         }
                     }
                 }
@@ -852,7 +1154,7 @@ private struct AccountCard: View {
                                     .tint(StudioTheme.ink)
                             } else {
                                 Image(systemName: "arrow.left.arrow.right")
-                                    .font(.system(size: 14, weight: .semibold))
+                                    .font(.system(size: 11, weight: .semibold))
                             }
                             Text(copy.switchAction)
                                 .font(StudioFont.label(10))
@@ -874,7 +1176,7 @@ private struct AccountCard: View {
                 }
             }
 
-            StitchUsageStrip(account: account, accent: usageAccent, copy: copy)
+            StitchUsageStrip(account: account, copy: copy)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -882,9 +1184,15 @@ private struct AccountCard: View {
             GlassPanelBackground(
                 cornerRadius: 16,
                 fillOpacity: 0.7,
-                borderColor: account.isCurrent ? StudioTheme.primary.opacity(0.2) : StudioTheme.outlineVariant.opacity(0.1),
+                borderColor: StudioTheme.outlineVariant.opacity(0.1),
                 shadowRadius: 6
             )
+        }
+        .overlay {
+            if account.isCurrent {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(StudioTheme.currentAccountBorder, lineWidth: 1.5)
+            }
         }
         .contextMenu {
             Button(role: .destructive) {
@@ -897,32 +1205,25 @@ private struct AccountCard: View {
     }
 
     private var emailLine: String {
-        (account.email ?? account.displayName).uppercased()
-    }
-
-    private var usageAccent: Color {
-        if account.isCurrent {
-            return StudioTheme.primary
-        }
-        return AccountPlanKind.resolve(account.effectivePlanType).usageAccent
+        (account.maskedEmail ?? account.maskedDisplayName).uppercased()
     }
 
     private var currentContextPill: some View {
         HStack(spacing: 6) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(StudioTheme.primary)
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(StudioTheme.ink)
             Text(currentPillTitle)
                 .font(StudioFont.label(10))
-                .foregroundStyle(StudioTheme.primary)
+                .foregroundStyle(StudioTheme.ink)
                 .lineLimit(1)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(StudioTheme.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(StudioTheme.currentAccountBorder.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(StudioTheme.primary.opacity(0.2), lineWidth: 1)
+                .stroke(StudioTheme.currentAccountBorder.opacity(0.55), lineWidth: 1)
         )
         .frame(maxWidth: 120, alignment: .trailing)
     }
@@ -934,7 +1235,6 @@ private struct AccountCard: View {
 
 private struct StitchUsageStrip: View {
     let account: AccountSummary
-    let accent: Color
     let copy: AppCopy
 
     var body: some View {
@@ -942,11 +1242,10 @@ private struct StitchUsageStrip: View {
             if snapshots.isEmpty {
                 UsageMeterRow(
                     copy: copy,
-                    section: .primary,
-                    windowLabel: "—",
+                    section: .fiveHour,
                     remainingHeadline: copy.syncing,
-                    remainingHeadlineTint: StudioTheme.muted,
-                    barFill: StudioTheme.outlineVariant.opacity(0.35),
+                    remainingHeadlineTint: StudioTheme.accentFree,
+                    barFill: StudioTheme.accentFree.opacity(0.35),
                     barGlow: .clear,
                     progress: 0,
                     resetCaption: "—"
@@ -962,7 +1261,6 @@ private struct StitchUsageStrip: View {
                     UsageMeterRow(
                         copy: copy,
                         section: snapshot.section,
-                        windowLabel: snapshot.windowLabel,
                         remainingHeadline: snapshot.remainingHeadline,
                         remainingHeadlineTint: snapshot.remainingHeadlineTint,
                         barFill: snapshot.barFill,
@@ -978,11 +1276,11 @@ private struct StitchUsageStrip: View {
 
     private var snapshots: [UsageSnapshot] {
         var values: [UsageSnapshot] = []
-        if let oneWeek = account.usage?.oneWeek {
-            values.append(makeSnapshot(section: .primary, windowKind: .oneWeek, window: oneWeek))
-        }
         if let fiveHour = account.usage?.fiveHour {
-            values.append(makeSnapshot(section: .secondary, windowKind: .fiveHour, window: fiveHour))
+            values.append(makeSnapshot(section: .fiveHour, windowKind: .fiveHour, window: fiveHour))
+        }
+        if let oneWeek = account.usage?.oneWeek {
+            values.append(makeSnapshot(section: .oneWeek, windowKind: .oneWeek, window: oneWeek))
         }
         return values
     }
@@ -996,59 +1294,43 @@ private struct StitchUsageStrip: View {
         let remaining = window.remainingPercent
         let remainingHeadline = remaining.map(copy.remainingHeadline(_:)) ?? copy.syncing
         let remainingHeadlineTint: Color = {
-            guard let remaining else {
-                return StudioTheme.muted
+            guard remaining != nil else {
+                return StudioTheme.accentFree
             }
-            if remaining >= 99.5 {
-                if account.isCurrent && section == .secondary {
-                    return StudioTheme.primary
-                }
-                return StudioTheme.ink
-            }
-            return accent
+            return StudioTheme.accentFree
         }()
         let barFill: Color = {
-            guard let remaining else {
-                return StudioTheme.outlineVariant.opacity(0.35)
+            if remaining == nil {
+                return StudioTheme.accentFree.opacity(0.35)
             }
-            if remaining >= 99.5 {
-                if account.isCurrent && section == .secondary {
-                    return StudioTheme.primary.opacity(0.3)
-                }
-                return StudioTheme.outlineVariant.opacity(0.35)
-            }
-            return accent
+            return StudioTheme.accentFree
         }()
         let barGlow: Color = {
             guard let remaining, remaining < 99.5 else {
                 return .clear
             }
-            return accent.opacity(0.28)
+            return StudioTheme.accentFree.opacity(0.24)
         }()
         let progress = max(0, min(remaining ?? 0, 100)) / 100
         let resetCaption: String = {
             if let used = window.usedPercent, used <= 0.01 {
+                if section == .fiveHour, let remaining, remaining >= 99.5 {
+                    return ""
+                }
                 return copy.noActiveUsage
             }
             if let resetAt = window.resetAt {
+                if section == .fiveHour {
+                    return absoluteResetCaption(resetAt: resetAt, language: copy.language, copy: copy)
+                }
                 return relativeResetCaption(resetAt: resetAt, language: copy.language, copy: copy)
             }
             return "—"
         }()
 
-        let windowLabel: String = {
-            switch windowKind {
-            case .oneWeek:
-                return copy.oneWeekWindow
-            case .fiveHour:
-                return copy.fiveHourWindow
-            }
-        }()
-
         return UsageSnapshot(
             id: windowKind == .oneWeek ? "oneWeek" : "fiveHour",
             section: section,
-            windowLabel: windowLabel,
             remainingHeadline: remainingHeadline,
             remainingHeadlineTint: remainingHeadlineTint,
             barFill: barFill,
@@ -1061,7 +1343,6 @@ private struct StitchUsageStrip: View {
     private struct UsageSnapshot: Identifiable {
         let id: String
         let section: UsageMeterRow.Section
-        let windowLabel: String
         let remainingHeadline: String
         let remainingHeadlineTint: Color
         let barFill: Color
@@ -1073,13 +1354,12 @@ private struct StitchUsageStrip: View {
 
 private struct UsageMeterRow: View {
     enum Section {
-        case primary
-        case secondary
+        case fiveHour
+        case oneWeek
     }
 
     let copy: AppCopy
     let section: Section
-    let windowLabel: String
     let remainingHeadline: String
     let remainingHeadlineTint: Color
     let barFill: Color
@@ -1089,10 +1369,10 @@ private struct UsageMeterRow: View {
 
     private var sectionTitle: String {
         switch section {
-        case .primary:
-            return copy.primaryUsageSection
-        case .secondary:
-            return copy.secondaryUsageSection
+        case .fiveHour:
+            return copy.fiveHourUsageSection
+        case .oneWeek:
+            return copy.oneWeekUsageSection
         }
     }
 
@@ -1101,14 +1381,22 @@ private struct UsageMeterRow: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(sectionTitle)
                     .font(StudioFont.label(11))
-                    .foregroundStyle(section == .secondary ? StudioTheme.muted : StudioTheme.ink)
+                    .foregroundStyle(StudioTheme.accentFree)
 
                 Spacer(minLength: 8)
 
-                Text(remainingHeadline)
-                    .font(StudioFont.label(11))
-                    .foregroundStyle(remainingHeadlineTint)
-                    .multilineTextAlignment(.trailing)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(remainingHeadline)
+                        .font(StudioFont.label(11))
+                        .foregroundStyle(remainingHeadlineTint)
+
+                    if !resetCaption.isEmpty {
+                        Text(resetCaption)
+                            .font(StudioFont.caption(10))
+                            .foregroundStyle(StudioTheme.accentFree)
+                    }
+                }
+                .multilineTextAlignment(.trailing)
             }
 
             GeometryReader { proxy in
@@ -1123,19 +1411,6 @@ private struct UsageMeterRow: View {
                 }
             }
             .frame(height: 6)
-
-            HStack(alignment: .firstTextBaseline) {
-                Text(windowLabel)
-                    .font(StudioFont.caption(10))
-                    .foregroundStyle(StudioTheme.muted)
-
-                Spacer(minLength: 8)
-
-                Text(resetCaption)
-                    .font(StudioFont.caption(10))
-                    .foregroundStyle(StudioTheme.muted)
-                    .multilineTextAlignment(.trailing)
-            }
         }
     }
 }
@@ -1153,6 +1428,11 @@ private func relativeResetCaption(resetAt: Int64, language: AppLanguage, copy: A
         return copy.resetsAt(usageDateFormatter(for: language).string(from: date))
     }
     return copy.resetsToday
+}
+
+private func absoluteResetCaption(resetAt: Int64, language: AppLanguage, copy: AppCopy) -> String {
+    let date = Date(timeIntervalSince1970: TimeInterval(resetAt))
+    return copy.resetsAt(usageTimeFormatter(for: language).string(from: date))
 }
 
 private enum StudioFont {
@@ -1194,7 +1474,7 @@ private struct StitchChip: View {
     private var background: Color {
         switch style {
         case .current:
-            return StudioTheme.primary.opacity(0.12)
+            return StudioTheme.secondaryContainer
         case .workspaceTeam:
             return StudioTheme.workspaceTeamBackground
         case .planFree:
@@ -1215,7 +1495,7 @@ private struct StitchChip: View {
     private var foreground: Color {
         switch style {
         case .current:
-            return StudioTheme.primary
+            return StudioTheme.onSecondaryContainer
         case .workspaceTeam:
             return StudioTheme.workspaceTeamForeground
         case .planFree:
@@ -1306,35 +1586,48 @@ private struct GlassPanelBackground: View {
     }
 }
 
+private struct FooterUtilityCapsuleLabel: View {
+    let icon: String
+    let title: String
+    let tint: Color
+    var isDisabled: Bool = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+            Text(title)
+                .font(StudioFont.label(10))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .foregroundStyle(isDisabled ? tint.opacity(0.45) : tint)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(StudioTheme.surfaceContainer.opacity(0.9))
+        )
+        .overlay(
+            Capsule()
+                .stroke(StudioTheme.outlineVariant.opacity(isDisabled ? 0.08 : 0.14), lineWidth: 1)
+        )
+    }
+}
+
 private struct FooterUtilityButton: View {
     let icon: String
     let title: String
     let tint: Color
+    var isDisabled: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(title)
-                    .font(StudioFont.label(10))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            .foregroundStyle(tint)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                Capsule()
-                    .fill(StudioTheme.surfaceContainer.opacity(0.9))
-            )
-            .overlay(
-                Capsule()
-                    .stroke(StudioTheme.outlineVariant.opacity(0.14), lineWidth: 1)
-            )
+            FooterUtilityCapsuleLabel(icon: icon, title: title, tint: tint, isDisabled: isDisabled)
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
         .fixedSize(horizontal: true, vertical: false)
         .layoutPriority(1)
     }
@@ -1392,20 +1685,24 @@ private enum StudioTheme {
     static let footerTopBorder = adaptive(light: .rgba(0.88, 0.89, 0.92, 0.35), dark: .rgba(0.267, 0.294, 0.361, 0.55))
     static let footerShadow = adaptive(light: .rgba(0.0, 0.0, 0.0, 0.05), dark: .rgba(0.0, 0.0, 0.0, 0.34))
     static let panelFill = adaptive(light: .rgba(1.0, 1.0, 1.0), dark: .rgba(0.082, 0.090, 0.118))
+    static let currentAccountBorder = adaptive(light: .rgba(0.48, 0.50, 0.55, 0.72), dark: .rgba(0.68, 0.71, 0.76, 0.72))
 
-    /// 非当前账号用量条：与账户类型一一对应
-    static let accentFree = adaptive(light: .rgba(0.55, 0.57, 0.62), dark: .rgba(0.647, 0.675, 0.733))
-    static let accentPlus = adaptive(light: .rgba(0.08, 0.58, 0.53), dark: .rgba(0.471, 0.867, 0.780))
-    static let accentTeamPlan = adaptive(light: .rgba(0.24, 0.34, 0.78), dark: .rgba(0.549, 0.620, 1.0))
+    /// 非当前账号用量条：与 plan 标签同色相，便于一眼对应档位
+    static let accentFree = adaptive(light: .rgba(0.48, 0.50, 0.55), dark: .rgba(0.68, 0.71, 0.76))
+    static let accentPlus = adaptive(light: .rgba(0.0, 0.50, 0.42), dark: .rgba(0.48, 0.93, 0.82))
+    static let accentTeamPlan = adaptive(light: .rgba(0.14, 0.22, 0.68), dark: .rgba(0.62, 0.70, 1.0))
     static let accentEnterprise = adaptive(light: .rgba(0.62, 0.42, 0.12), dark: .rgba(0.925, 0.733, 0.451))
     static let workspaceTeamBackground = adaptive(light: .rgba(0.89, 0.95, 1.0), dark: .rgba(0.137, 0.235, 0.365))
     static let workspaceTeamForeground = adaptive(light: .rgba(0.15, 0.39, 0.92), dark: .rgba(0.612, 0.796, 1.0))
-    static let planFreeBackground = adaptive(light: .rgba(0.95, 0.96, 0.98), dark: .rgba(0.173, 0.184, 0.216))
-    static let planFreeForeground = adaptive(light: .rgba(0.35, 0.40, 0.48), dark: .rgba(0.792, 0.816, 0.871))
-    static let planPlusBackground = adaptive(light: .rgba(0.88, 0.97, 0.95), dark: .rgba(0.118, 0.263, 0.239))
-    static let planPlusForeground = adaptive(light: .rgba(0.05, 0.45, 0.42), dark: .rgba(0.549, 0.933, 0.863))
-    static let planTeamBackground = adaptive(light: .rgba(0.90, 0.92, 1.0), dark: .rgba(0.149, 0.180, 0.353))
-    static let planTeamForeground = adaptive(light: .rgba(0.18, 0.25, 0.62), dark: .rgba(0.702, 0.749, 1.0))
+    /// Free：中性灰，避免与 Plus 青绿、Team 靛蓝混成「一片浅蓝」
+    static let planFreeBackground = adaptive(light: .rgba(0.92, 0.93, 0.94), dark: .rgba(0.16, 0.17, 0.20))
+    static let planFreeForeground = adaptive(light: .rgba(0.36, 0.38, 0.42), dark: .rgba(0.74, 0.77, 0.82))
+    /// Plus：偏青绿轴，与 Team 的蓝色轴拉开
+    static let planPlusBackground = adaptive(light: .rgba(0.78, 0.96, 0.90), dark: .rgba(0.08, 0.24, 0.22))
+    static let planPlusForeground = adaptive(light: .rgba(0.0, 0.50, 0.42), dark: .rgba(0.48, 0.93, 0.82))
+    /// Team：偏靛蓝 / 紫蓝，与 Plus 的青绿明显不同
+    static let planTeamBackground = adaptive(light: .rgba(0.84, 0.87, 1.0), dark: .rgba(0.14, 0.16, 0.38))
+    static let planTeamForeground = adaptive(light: .rgba(0.14, 0.22, 0.68), dark: .rgba(0.62, 0.70, 1.0))
     static let planEnterpriseBackground = adaptive(light: .rgba(1.0, 0.95, 0.88), dark: .rgba(0.322, 0.227, 0.102))
     static let planEnterpriseForeground = adaptive(light: .rgba(0.45, 0.30, 0.08), dark: .rgba(1.0, 0.859, 0.624))
 
@@ -1443,6 +1740,13 @@ private func usageDateFormatter(for language: AppLanguage) -> DateFormatter {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: language.localeIdentifier)
     formatter.dateFormat = "MM-dd HH:mm"
+    return formatter
+}
+
+private func usageTimeFormatter(for language: AppLanguage) -> DateFormatter {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: language.localeIdentifier)
+    formatter.dateFormat = "HH:mm"
     return formatter
 }
 

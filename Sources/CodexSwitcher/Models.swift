@@ -38,7 +38,7 @@ struct CurrentAccountSelection: Codable {
     var sourceDeviceID: String
 }
 
-struct AccountSummary: Identifiable {
+struct AccountSummary: Identifiable, Equatable {
     var id: String
     var label: String
     var email: String?
@@ -59,12 +59,59 @@ struct AccountSummary: Identifiable {
         return accountID
     }
 
+    var maskedEmail: String? {
+        guard let email else {
+            return nil
+        }
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed.maskedEmailKeepingPrefixAndDomain()
+    }
+
+    var maskedDisplayName: String {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedLabel.isEmpty {
+            return trimmedLabel.maskedEmailKeepingPrefixAndDomain()
+        }
+        if let maskedEmail {
+            return maskedEmail
+        }
+        return accountID
+    }
+
     var effectivePlanType: String? {
         let trimmedPlanType = planType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedPlanType.isEmpty {
             return trimmedPlanType
         }
         return usage?.planType
+    }
+
+    var fiveHourRemainingPercent: Double? {
+        usage?.fiveHour?.remainingPercent
+    }
+
+    var oneWeekRemainingPercent: Double? {
+        usage?.oneWeek?.remainingPercent
+    }
+
+    static func == (lhs: AccountSummary, rhs: AccountSummary) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+private extension String {
+    func maskedEmailKeepingPrefixAndDomain() -> String {
+        guard let atIndex = firstIndex(of: "@"), atIndex != startIndex else {
+            return self
+        }
+
+        let localPart = self[..<atIndex]
+        let domainPart = self[atIndex...]
+        let visiblePrefix = localPart.prefix(3)
+        return "\(visiblePrefix)***\(domainPart)"
     }
 }
 

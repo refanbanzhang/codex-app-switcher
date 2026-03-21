@@ -27,7 +27,7 @@ struct CLI {
             try listAccounts()
         case "current":
             if let current = try accountService.currentAccount() {
-                print("\(current.displayName) [\(current.accountID)]")
+                print("\(current.maskedDisplayName) [\(current.accountID)]")
             } else {
                 print("No current account.")
             }
@@ -37,14 +37,32 @@ struct CLI {
                 throw CLIError("Missing account identifier. Use store ID or account ID.")
             }
             let summary = try accountService.switchAccount(identifier: identifier)
-            print("Switched to \(summary.displayName) [\(summary.accountID)]")
+            print("Switched to \(summary.maskedDisplayName) [\(summary.accountID)]")
         case "delete":
             let remaining = Array(arguments.dropFirst())
             guard let identifier = remaining.first else {
                 throw CLIError("Missing account identifier. Use store ID or account ID.")
             }
             let summary = try accountService.deleteAccount(identifier: identifier)
-            print("Deleted \(summary.displayName) [\(summary.accountID)]")
+            print("Deleted \(summary.maskedDisplayName) [\(summary.accountID)]")
+        case "export":
+            let remaining = Array(arguments.dropFirst())
+            let outputURL: URL?
+            if let path = remaining.first {
+                outputURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            } else {
+                outputURL = nil
+            }
+            let result = try accountService.exportAccountsJSON(to: outputURL)
+            print("Exported \(result.accountCount) accounts to \(result.fileURL.path)")
+        case "import":
+            let remaining = Array(arguments.dropFirst())
+            guard let path = remaining.first else {
+                throw CLIError("Missing import file path.")
+            }
+            let inputURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            let result = try accountService.importAccountsJSON(from: inputURL)
+            print("Imported \(result.totalCount) account(s): +\(result.addedCount) new, \(result.updatedCount) updated")
         case "help", "--help", "-h":
             print(Self.helpText)
         default:
@@ -61,11 +79,11 @@ struct CLI {
 
         for account in accounts {
             let marker = account.isCurrent ? "*" : " "
-            let email = account.email ?? "-"
+            let email = account.maskedEmail ?? "-"
             let plan = account.effectivePlanType ?? "-"
             let team = account.teamName ?? "-"
             let usage = usageSummary(for: account)
-            print("\(marker) \(account.id)  \(account.displayName)  \(email)  \(account.accountID)  \(plan)  \(team)  \(usage)")
+            print("\(marker) \(account.id)  \(account.maskedDisplayName)  \(email)  \(account.accountID)  \(plan)  \(team)  \(usage)")
         }
     }
 
@@ -90,12 +108,16 @@ struct CLI {
       current
       switch IDENTIFIER
       delete IDENTIFIER
+      export [OUTPUT_PATH]
+      import INPUT_PATH
 
     Notes:
       - Accounts are read from Copool: ~/Library/Application Support/CodexToolsSwift/accounts.json
       - Current Codex auth is read from and written to ~/.codex/auth.json
       - switch also updates currentSelection in the Copool store
       - delete removes the saved account from the Copool store
+      - export writes all saved account JSON for quick import (default: ~/Downloads/codex-accounts-export-*.json)
+      - import reads an exported JSON file and merges accounts by account id
       - IDENTIFIER can be the stored account id or the ChatGPT account id
     """
 }

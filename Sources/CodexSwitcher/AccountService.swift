@@ -150,6 +150,130 @@ struct AccountService: @unchecked Sendable {
         )
     }
 
+    func exportAccountsJSON(to outputURL: URL? = nil) throws -> AccountsExportResult {
+        try preserveCurrentAuthBeforeSwitch()
+        let store = try storeRepository.loadOrEmpty()
+        guard !store.accounts.isEmpty else {
+            throw CLIError("没有可导出的账号。")
+        }
+
+        let destination = outputURL ?? defaultExportURL()
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(store)
+        try data.write(to: destination, options: .atomic)
+
+        return AccountsExportResult(fileURL: destination, accountCount: store.accounts.count)
+    }
+
+    func importAccountsJSON(from inputURL: URL) throws -> AccountsImportResult {
+        let canAccess = inputURL.startAccessingSecurityScopedResource()
+        defer {
+            if canAccess {
+                inputURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let data = try Data(contentsOf: inputURL)
+        let decoder = JSONDecoder()
+        let importedStore: AccountStore
+        if let decodedStore = try? decoder.decode(AccountStore.self, from: data) {
+            importedStore = decodedStore
+        } else if let decodedAccounts = try? decoder.decode([StoredAccount].self, from: data) {
+            importedStore = AccountStore(version: 1, accounts: decodedAccounts, currentSelection: nil)
+        } else {
+            throw CLIError("导入文件格式不正确，请选择由导出功能生成的 JSON。")
+        }
+
+        guard !importedStore.accounts.isEmpty else {
+            throw CLIError("导入文件没有账号数据。")
+        }
+
+        var store = try storeRepository.loadOrEmpty()
+        let now = Int64(Date().timeIntervalSince1970)
+        var addedCount = 0
+        var updatedCount = 0
+
+        for rawAccount in importedStore.accounts {
+            let account = normalizedImportedAccount(rawAccount, now: now)
+            let accountID = account.accountID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !accountID.isEmpty else {
+                continue
+            }
+
+            if let existingIndex = store.accounts.firstIndex(where: { $0.accountID == accountID }) {
+                let existing = store.accounts[existingIndex]
+                store.accounts[existingIndex] = StoredAccount(
+                    id: existing.id,
+                    label: account.label.isEmpty ? existing.label : account.label,
+                    email: account.email ?? existing.email,
+                    accountID: existing.accountID,
+                    planType: account.planType ?? existing.planType,
+                    teamName: account.teamName ?? existing.teamName,
+                    usage: account.usage ?? existing.usage,
+                    authJSON: account.authJSON,
+                    addedAt: existing.addedAt,
+                    updatedAt: now
+                )
+                updatedCount += 1
+            } else {
+                store.accounts.append(account)
+                addedCount += 1
+            }
+        }
+
+        if addedCount == 0, updatedCount == 0 {
+            throw CLIError("导入文件没有可用账号数据。")
+        }
+
+        try storeRepository.save(store)
+        return AccountsImportResult(
+            addedCount: addedCount,
+            updatedCount: updatedCount,
+            totalCount: addedCount + updatedCount
+        )
+    }
+
+    private func defaultExportURL(now: Date = Date()) -> URL {
+        let fileManager = FileManager.default
+        let directory = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let fileName = "codex-accounts-export-\(formatter.string(from: now)).json"
+        return directory.appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    private func normalizedImportedAccount(_ account: StoredAccount, now: Int64) -> StoredAccount {
+        let trimmedLabel = account.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeLabel: String
+        if trimmedLabel.isEmpty {
+            if let email = account.email?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
+                safeLabel = email
+            } else {
+                safeLabel = "Codex \(String(account.accountID.prefix(8)))"
+            }
+        } else {
+            safeLabel = trimmedLabel
+        }
+
+        return StoredAccount(
+            id: account.id.isEmpty ? UUID().uuidString : account.id,
+            label: safeLabel,
+            email: account.email,
+            accountID: account.accountID,
+            planType: account.planType,
+            teamName: account.teamName,
+            usage: account.usage,
+            authJSON: account.authJSON,
+            addedAt: account.addedAt > 0 ? account.addedAt : now,
+            updatedAt: now
+        )
+    }
+
     private func preserveCurrentAuthBeforeSwitch() throws {
         guard let currentAuth = try? authRepository.readCurrentAuth() else {
             return
@@ -225,6 +349,17 @@ struct AccountService: @unchecked Sendable {
                 return left.displayName.localizedCaseInsensitiveCompare(right.displayName) == .orderedAscending
             }
     }
+}
+
+struct AccountsExportResult {
+    let fileURL: URL
+    let accountCount: Int
+}
+
+struct AccountsImportResult {
+    let addedCount: Int
+    let updatedCount: Int
+    let totalCount: Int
 }
 
 struct RefreshedAccountUsage {
