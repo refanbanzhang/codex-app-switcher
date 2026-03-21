@@ -100,12 +100,36 @@ private struct AppCopy {
         }
     }
 
+    func clearedAccounts(accountCount: Int, removedCurrentAuth: Bool) -> String {
+        switch language {
+        case .chinese:
+            if removedCurrentAuth {
+                return "已清空 \(accountCount) 个账号，包括当前账号登录状态"
+            }
+            return "已清空 \(accountCount) 个账号"
+        case .english:
+            if removedCurrentAuth {
+                return "Cleared \(accountCount) account(s), including the current sign-in."
+            }
+            return "Cleared \(accountCount) account(s)."
+        }
+    }
+
     var deleteAccountTitle: String {
         switch language {
         case .chinese:
             return "删除这个账号？"
         case .english:
             return "Delete this account?"
+        }
+    }
+
+    var clearAccountsTitle: String {
+        switch language {
+        case .chinese:
+            return "清空全部账户（包括当前账号）？"
+        case .english:
+            return "Clear all accounts, including the current one?"
         }
     }
 
@@ -142,6 +166,15 @@ private struct AppCopy {
         }
     }
 
+    func clearAccountsMessage(accountCount: Int) -> String {
+        switch language {
+        case .chinese:
+            return "这会移除保存列表中的 \(accountCount) 个账号，包括当前账号，并删除 ~/.codex/auth.json 登录状态。此操作不可撤销。"
+        case .english:
+            return "This removes \(accountCount) saved account(s), including the current one, and deletes the ~/.codex/auth.json sign-in state. This cannot be undone."
+        }
+    }
+
     var loadingAccounts: String {
         switch language {
         case .chinese:
@@ -175,6 +208,24 @@ private struct AppCopy {
             return "导出账号JSON"
         case .english:
             return "Export JSON"
+        }
+    }
+
+    var clearAccountsAction: String {
+        switch language {
+        case .chinese:
+            return "清空账户"
+        case .english:
+            return "Clear Accounts"
+        }
+    }
+
+    var clearingAccountsAction: String {
+        switch language {
+        case .chinese:
+            return "清空中…"
+        case .english:
+            return "Clearing…"
         }
     }
 
@@ -400,6 +451,7 @@ fileprivate enum AppNotice {
     case switched(String)
     case added(String)
     case deleted(String)
+    case cleared(accountCount: Int, removedCurrentAuth: Bool)
     case exported(accountCount: Int, outputPath: String)
     case imported(totalCount: Int, addedCount: Int, updatedCount: Int)
 
@@ -413,6 +465,8 @@ fileprivate enum AppNotice {
             return copy.addedAccount(name)
         case .deleted(let name):
             return copy.deletedAccount(name)
+        case .cleared(let accountCount, let removedCurrentAuth):
+            return copy.clearedAccounts(accountCount: accountCount, removedCurrentAuth: removedCurrentAuth)
         case .exported(let accountCount, let outputPath):
             return copy.exportedAccounts(accountCount: accountCount, outputPath: outputPath)
         case .imported(let totalCount, let addedCount, let updatedCount):
@@ -452,9 +506,11 @@ final class AccountSwitcherViewModel: ObservableObject {
     @Published var isLoggingIn = false
     @Published var isExporting = false
     @Published var isImporting = false
+    @Published var isClearingAccounts = false
     @Published var switchingAccountID: String?
     @Published var deletingAccountID: String?
     @Published var pendingDeletionAccount: AccountSummary?
+    @Published var pendingClearAllAccountCount: Int?
     @Published var errorMessage: String?
     @Published fileprivate var notice: AppNotice?
 
@@ -552,6 +608,7 @@ final class AccountSwitcherViewModel: ObservableObject {
             && !isLoggingIn
             && !isExporting
             && !isImporting
+            && !isClearingAccounts
             && switchingAccountID == nil
             && deletingAccountID == nil
     }
@@ -658,6 +715,16 @@ final class AccountSwitcherViewModel: ObservableObject {
         pendingDeletionAccount = nil
     }
 
+    func confirmClearAllAccounts() {
+        let count = accounts.count
+        guard count > 0 else { return }
+        pendingClearAllAccountCount = count
+    }
+
+    func cancelClearAllAccounts() {
+        pendingClearAllAccountCount = nil
+    }
+
     func completeDeletion(of account: AccountSummary) async {
         pendingDeletionAccount = nil
         deletingAccountID = account.id
@@ -666,6 +733,20 @@ final class AccountSwitcherViewModel: ObservableObject {
         do {
             let deleted = try accountService.deleteAccount(identifier: account.id)
             showNotice(.deleted(deleted.maskedDisplayName))
+            await load(preserveNotice: true)
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
+    func clearAllAccounts() async {
+        pendingClearAllAccountCount = nil
+        isClearingAccounts = true
+        defer { isClearingAccounts = false }
+
+        do {
+            let result = try accountService.clearAllAccounts()
+            showNotice(.cleared(accountCount: result.clearedAccountCount, removedCurrentAuth: result.removedCurrentAuth))
             await load(preserveNotice: true)
         } catch {
             showError(error.localizedDescription)
@@ -728,6 +809,7 @@ struct ContentView: View {
             || model.isLoading
             || model.isExporting
             || model.isImporting
+            || model.isClearingAccounts
             || model.switchingAccountID != nil
             || model.deletingAccountID != nil
     }
@@ -815,6 +897,28 @@ struct ContentView: View {
             }
         } message: { account in
             Text(copy.deleteAccountMessage(accountName: account.maskedDisplayName))
+        }
+        .alert(
+            copy.clearAccountsTitle,
+            isPresented: Binding(
+                get: { model.pendingClearAllAccountCount != nil },
+                set: { presented in
+                    if !presented {
+                        model.cancelClearAllAccounts()
+                    }
+                }
+            )
+        ) {
+            Button(copy.clearAccountsAction, role: .destructive) {
+                Task {
+                    await model.clearAllAccounts()
+                }
+            }
+            Button(copy.cancelAction, role: .cancel) {
+                model.cancelClearAllAccounts()
+            }
+        } message: {
+            Text(copy.clearAccountsMessage(accountCount: model.pendingClearAllAccountCount ?? 0))
         }
         .fileImporter(isPresented: $isImporterPresented, allowedContentTypes: [.json]) { result in
             switch result {
@@ -968,6 +1072,18 @@ private struct ToolbarSettingsMenuButton: NSViewRepresentable {
             exportItem.isEnabled = !parent.accountActionBusy
             menu.addItem(exportItem)
 
+            menu.addItem(.separator())
+
+            let clearItem = NSMenuItem(
+                title: parent.model.isClearingAccounts ? parent.copy.clearingAccountsAction : parent.copy.clearAccountsAction,
+                action: #selector(clearAccounts),
+                keyEquivalent: ""
+            )
+            clearItem.target = self
+            clearItem.image = NSImage(systemSymbolName: "trash.slash", accessibilityDescription: nil)
+            clearItem.isEnabled = !parent.accountActionBusy && !parent.model.accounts.isEmpty
+            menu.addItem(clearItem)
+
             return menu
         }
 
@@ -986,6 +1102,12 @@ private struct ToolbarSettingsMenuButton: NSViewRepresentable {
         @objc func exportJSON(_ sender: Any?) {
             Task { @MainActor in
                 self.parent.model.exportAccountsJSON()
+            }
+        }
+
+        @objc func clearAccounts(_ sender: Any?) {
+            Task { @MainActor in
+                self.parent.model.confirmClearAllAccounts()
             }
         }
 

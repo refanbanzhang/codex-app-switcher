@@ -7,7 +7,9 @@ struct AccountService: @unchecked Sendable {
     let usageService: ChatGPTUsageService
 
     func syncCurrentAuthAccountOnStartup() throws {
-        let authJSON = try authRepository.readCurrentAuth()
+        guard let authJSON = try authRepository.readCurrentAuthIfPresent() else {
+            return
+        }
         _ = try upsertAccount(authJSON: authJSON)
     }
 
@@ -137,6 +139,24 @@ struct AccountService: @unchecked Sendable {
             teamName: account.teamName,
             usage: account.usage,
             isCurrent: false
+        )
+    }
+
+    func clearAllAccounts() throws -> ClearedAccountsResult {
+        let existingAuth = try authRepository.readCurrentAuthIfPresent()
+        let store = try storeRepository.loadOrEmpty()
+        let clearedAccountCount = store.accounts.count
+
+        guard clearedAccountCount > 0 || existingAuth != nil else {
+            throw CLIError("没有可清空的账号。")
+        }
+
+        try storeRepository.save(AccountStore())
+        try authRepository.clearCurrentAuth()
+
+        return ClearedAccountsResult(
+            clearedAccountCount: clearedAccountCount,
+            removedCurrentAuth: existingAuth != nil
         )
     }
 
@@ -350,6 +370,11 @@ struct AccountsImportResult {
     let addedCount: Int
     let updatedCount: Int
     let totalCount: Int
+}
+
+struct ClearedAccountsResult {
+    let clearedAccountCount: Int
+    let removedCurrentAuth: Bool
 }
 
 struct RefreshedAccountUsage {

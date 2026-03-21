@@ -7,6 +7,13 @@ struct AuthRepository {
     let paths: AppPaths
     private let fileManager: FileManager = .default
 
+    func readCurrentAuthIfPresent() throws -> JSONValue? {
+        guard fileManager.fileExists(atPath: paths.codexAuthPath.path) else {
+            return nil
+        }
+        return try readJSONValue(from: paths.codexAuthPath)
+    }
+
     func readCurrentAuth() throws -> JSONValue {
         guard fileManager.fileExists(atPath: paths.codexAuthPath.path) else {
             throw CLIError("Auth file not found at \(paths.codexAuthPath.path)")
@@ -30,6 +37,13 @@ struct AuthRepository {
         #if canImport(Darwin)
         _ = chmod(paths.codexAuthPath.path, S_IRUSR | S_IWUSR)
         #endif
+    }
+
+    func clearCurrentAuth() throws {
+        guard fileManager.fileExists(atPath: paths.codexAuthPath.path) else {
+            return
+        }
+        try fileManager.removeItem(at: paths.codexAuthPath)
     }
 
     func extractAuth(from auth: JSONValue) throws -> ExtractedAuth {
