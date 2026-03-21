@@ -6,7 +6,7 @@ struct AccountStore: Codable {
     var currentSelection: CurrentAccountSelection?
 }
 
-struct StoredAccount: Codable, Identifiable {
+struct StoredAccount: Codable {
     var id: String
     var label: String
     var email: String?
@@ -38,7 +38,7 @@ struct CurrentAccountSelection: Codable {
     var sourceDeviceID: String
 }
 
-struct AccountSummary: Identifiable, Equatable {
+struct AccountSummary: Identifiable {
     var id: String
     var label: String
     var email: String?
@@ -97,9 +97,6 @@ struct AccountSummary: Identifiable, Equatable {
         usage?.oneWeek?.remainingPercent
     }
 
-    static func == (lhs: AccountSummary, rhs: AccountSummary) -> Bool {
-        lhs.id == rhs.id
-    }
 }
 
 private extension String {
@@ -128,22 +125,14 @@ struct ChatGPTOAuthTokens {
 }
 
 struct AccountUsage: Codable {
-    var credits: UsageCredits?
-    var fetchedAt: Int64?
     var fiveHour: UsageWindow?
     var oneWeek: UsageWindow?
     var planType: String?
 }
 
-struct UsageCredits: Codable {
-    var hasCredits: Bool?
-    var unlimited: Bool?
-}
-
 struct UsageWindow: Codable {
     var resetAt: Int64?
     var usedPercent: Double?
-    var windowSeconds: Int64?
 
     var remainingPercent: Double? {
         guard let usedPercent else {

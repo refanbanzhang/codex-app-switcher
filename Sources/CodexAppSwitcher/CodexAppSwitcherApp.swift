@@ -223,15 +223,6 @@ private struct AppCopy {
         }
     }
 
-    var currentBadge: String {
-        switch language {
-        case .chinese:
-            return "当前"
-        case .english:
-            return "CURRENT"
-        }
-    }
-
     var currentPillTitle: String {
         switch language {
         case .chinese:
@@ -527,11 +518,6 @@ final class AccountSwitcherViewModel: ObservableObject {
                 await self.runAutomaticUsageRefreshTick()
             }
         }
-    }
-
-    func stopUsageAutoRefresh() {
-        usageAutoRefreshTask?.cancel()
-        usageAutoRefreshTask = nil
     }
 
     func load(preserveNotice: Bool = false) async {

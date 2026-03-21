@@ -11,12 +11,6 @@ struct AccountService: @unchecked Sendable {
         _ = try upsertAccount(authJSON: authJSON)
     }
 
-    func listAccounts() throws -> [AccountSummary] {
-        let store = try storeRepository.load()
-        let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID
-        return summaries(from: store, currentAccountID: currentAccountID)
-    }
-
     func refreshUsageForAllAccounts() async throws -> [AccountSummary] {
         var store = try storeRepository.loadOrEmpty()
         let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID
@@ -58,10 +52,6 @@ struct AccountService: @unchecked Sendable {
         }
 
         return summaries(from: store, currentAccountID: currentAccountID)
-    }
-
-    func currentAccount() throws -> AccountSummary? {
-        try listAccounts().first(where: \.isCurrent)
     }
 
     func addAccountViaLogin(timeoutSeconds: TimeInterval = 10 * 60) async throws -> AccountSummary {
@@ -475,8 +465,7 @@ final class ChatGPTUsageService: @unchecked Sendable {
         for window in windows {
             let mappedWindow = UsageWindow(
                 resetAt: window.resetAt,
-                usedPercent: window.usedPercent,
-                windowSeconds: window.limitWindowSeconds
+                usedPercent: window.usedPercent
             )
 
             switch window.limitWindowSeconds ?? 0 {
@@ -492,11 +481,6 @@ final class ChatGPTUsageService: @unchecked Sendable {
         }
 
         return AccountUsage(
-            credits: UsageCredits(
-                hasCredits: response.credits?.hasCredits,
-                unlimited: response.credits?.unlimited
-            ),
-            fetchedAt: Int64(Date().timeIntervalSince1970),
             fiveHour: fiveHour,
             oneWeek: oneWeek,
             planType: response.planType
@@ -567,12 +551,10 @@ private struct UsageRequestError: Error {
 private struct ChatGPTUsageResponse: Decodable {
     var planType: String?
     var rateLimit: ChatGPTUsageLimitGroup?
-    var credits: ChatGPTUsageCredits?
 
     enum CodingKeys: String, CodingKey {
         case planType = "plan_type"
         case rateLimit = "rate_limit"
-        case credits
     }
 }
 
@@ -595,16 +577,6 @@ private struct ChatGPTUsageWindow: Decodable {
         case resetAt = "reset_at"
         case usedPercent = "used_percent"
         case limitWindowSeconds = "limit_window_seconds"
-    }
-}
-
-private struct ChatGPTUsageCredits: Decodable {
-    var hasCredits: Bool?
-    var unlimited: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case hasCredits = "has_credits"
-        case unlimited
     }
 }
 
