@@ -1,6 +1,42 @@
 # codex-app-switcher
 
+A macOS utility to quickly switch Codex accounts and launch Codex.
+
 一个用于快速切换 Codex 账号并启动 Codex 的 macOS 工具。
+
+## Quick Start (English)
+
+Package the `.app` from the repository root:
+
+```bash
+./scripts/package-app.sh
+```
+
+Build output:
+
+```bash
+./dist/codex-app-switcher.app
+```
+
+Launch:
+
+```bash
+open ./dist/codex-app-switcher.app
+```
+
+## 隐私保护 / Privacy Guard (Recommended)
+
+Install the built-in `pre-commit` hook to scan staged files for common secrets before commit:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+If a commit is blocked, unstage suspicious files first:
+
+```bash
+git restore --staged <file>
+```
 
 ## 打包 `.app`（最简单）
 
