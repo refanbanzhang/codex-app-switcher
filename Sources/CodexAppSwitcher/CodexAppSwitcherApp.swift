@@ -79,6 +79,15 @@ private struct AppCopy {
         }
     }
 
+    var previewInteractionNotice: String {
+        switch language {
+        case .chinese:
+            return "Xcode 预览仅展示示例数据，已禁用登录、切换、导入导出和删除等真实操作。"
+        case .english:
+            return "Xcode previews use sample data only, so sign-in, switching, import/export, and deletion stay disabled."
+        }
+    }
+
     func switchedTo(_ name: String) -> String {
         switch language {
         case .chinese:
@@ -454,6 +463,7 @@ private struct AppCopy {
 
 fileprivate enum AppNotice {
     case emptyAccounts
+    case previewInteraction
     case switched(String)
     case added(String)
     case deleted(String)
@@ -465,6 +475,8 @@ fileprivate enum AppNotice {
         switch self {
         case .emptyAccounts:
             return copy.emptyAccountsNotice
+        case .previewInteraction:
+            return copy.previewInteractionNotice
         case .switched(let name):
             return copy.switchedTo(name)
         case .added(let name):
@@ -706,6 +718,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func switchAccount(_ account: AccountSummary) async {
+        guard !handlePreviewInteraction() else { return }
         switchingAccountID = account.id
         defer { switchingAccountID = nil }
 
@@ -720,6 +733,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func addAccountViaLogin() async {
+        guard !handlePreviewInteraction() else { return }
         isLoggingIn = true
         defer { isLoggingIn = false }
 
@@ -733,6 +747,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func exportAccountsJSON() {
+        guard !handlePreviewInteraction() else { return }
         isExporting = true
         defer { isExporting = false }
 
@@ -745,6 +760,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func importAccountsJSON(from fileURL: URL) async {
+        guard !handlePreviewInteraction() else { return }
         isImporting = true
         defer { isImporting = false }
 
@@ -761,7 +777,12 @@ final class AccountSwitcherViewModel: ObservableObject {
         showError(message)
     }
 
+    func shouldPresentImportPicker() -> Bool {
+        !handlePreviewInteraction()
+    }
+
     func confirmDelete(_ account: AccountSummary) {
+        guard !handlePreviewInteraction() else { return }
         pendingDeletionAccount = account
     }
 
@@ -770,6 +791,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func confirmClearAllAccounts() {
+        guard !handlePreviewInteraction() else { return }
         let count = accounts.count
         guard count > 0 else { return }
         pendingClearAllAccountCount = count
@@ -780,6 +802,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func completeDeletion(of account: AccountSummary) async {
+        guard !handlePreviewInteraction() else { return }
         pendingDeletionAccount = nil
         deletingAccountID = account.id
         defer { deletingAccountID = nil }
@@ -794,6 +817,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func clearAllAccounts() async {
+        guard !handlePreviewInteraction() else { return }
         pendingClearAllAccountCount = nil
         isClearingAccounts = true
         defer { isClearingAccounts = false }
@@ -811,6 +835,12 @@ final class AccountSwitcherViewModel: ObservableObject {
         self.notice = notice
         errorMessage = nil
         scheduleBannerDismissal()
+    }
+
+    private func handlePreviewInteraction() -> Bool {
+        guard isPreviewMode else { return false }
+        showNotice(.previewInteraction)
+        return true
     }
 
     private func showError(_ message: String) {
@@ -1217,6 +1247,7 @@ private struct ToolbarSettingsMenuButton: NSViewRepresentable {
 
         @objc func importJSON(_ sender: Any?) {
             Task { @MainActor in
+                guard self.parent.model.shouldPresentImportPicker() else { return }
                 self.parent.isImporterPresented = true
             }
         }
