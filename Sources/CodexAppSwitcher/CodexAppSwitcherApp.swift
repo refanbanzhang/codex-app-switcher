@@ -61,12 +61,6 @@ private enum AppTheme: String {
     }
 }
 
-private enum PreviewSupport {
-    static var isRunning: Bool {
-        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
-    }
-}
-
 private struct AppCopy {
     let language: AppLanguage
 
@@ -76,15 +70,6 @@ private struct AppCopy {
             return "保存列表中还没有可切换的账号。"
         case .english:
             return "No switchable accounts in the saved list yet."
-        }
-    }
-
-    var previewInteractionNotice: String {
-        switch language {
-        case .chinese:
-            return "Xcode 预览仅展示示例数据，已禁用登录、切换、导入导出和删除等真实操作。"
-        case .english:
-            return "Xcode previews use sample data only, so sign-in, switching, import/export, and deletion stay disabled."
         }
     }
 
@@ -463,7 +448,6 @@ private struct AppCopy {
 
 fileprivate enum AppNotice {
     case emptyAccounts
-    case previewInteraction
     case switched(String)
     case added(String)
     case deleted(String)
@@ -475,8 +459,6 @@ fileprivate enum AppNotice {
         switch self {
         case .emptyAccounts:
             return copy.emptyAccountsNotice
-        case .previewInteraction:
-            return copy.previewInteractionNotice
         case .switched(let name):
             return copy.switchedTo(name)
         case .added(let name):
@@ -495,7 +477,7 @@ fileprivate enum AppNotice {
 
 @main
 struct CodexAppSwitcherApp: App {
-    @StateObject private var model = AccountSwitcherViewModel(previewMode: PreviewSupport.isRunning)
+    @StateObject private var model = AccountSwitcherViewModel()
     @AppStorage(AppTheme.storageKey) private var storedTheme = AppTheme.light.rawValue
 
     private var selectedTheme: AppTheme {
@@ -532,7 +514,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published fileprivate var notice: AppNotice?
 
-    let isPreviewMode: Bool
     private let accountService: AccountService
     private let codexAppController = CodexAppController()
     private var bannerDismissTask: Task<Void, Never>?
@@ -540,32 +521,7 @@ final class AccountSwitcherViewModel: ObservableObject {
     private var isUsageRefreshInFlight = false
     private var loadGeneration: UInt64 = 0
 
-    init(previewMode: Bool = false) {
-        self.isPreviewMode = previewMode
-
-        if previewMode {
-            self.accountService = AccountService(
-                authRepository: AuthRepository(paths: AppPaths(
-                    appSupportDirectory: URL(fileURLWithPath: "/"),
-                    accountStorePath: URL(fileURLWithPath: "/"),
-                    codexAuthPath: URL(fileURLWithPath: "/"),
-                    codexConfigPath: URL(fileURLWithPath: "/"),
-                    authBackupDirectory: URL(fileURLWithPath: "/")
-                )),
-                storeRepository: StoreRepository(paths: AppPaths(
-                    appSupportDirectory: URL(fileURLWithPath: "/"),
-                    accountStorePath: URL(fileURLWithPath: "/"),
-                    codexAuthPath: URL(fileURLWithPath: "/"),
-                    codexConfigPath: URL(fileURLWithPath: "/"),
-                    authBackupDirectory: URL(fileURLWithPath: "/")
-                )),
-                loginService: OpenAIChatGPTOAuthLoginService(configPath: URL(fileURLWithPath: "/")),
-                usageService: ChatGPTUsageService()
-            )
-            self.accounts = Self.previewAccounts
-            return
-        }
-
+    init() {
         do {
             let paths = try AppPaths.live()
             let authRepository = AuthRepository(paths: paths)
@@ -607,7 +563,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func startUsageAutoRefreshIfNeeded() {
-        guard !isPreviewMode else { return }
         guard usageAutoRefreshTask == nil else { return }
 
         usageAutoRefreshTask = Task { [weak self] in
@@ -623,7 +578,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func load(preserveNotice: Bool = false) async {
-        guard !isPreviewMode else { return }
         loadGeneration &+= 1
         let generation = loadGeneration
         isLoading = true
@@ -718,7 +672,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func switchAccount(_ account: AccountSummary) async {
-        guard !handlePreviewInteraction() else { return }
         switchingAccountID = account.id
         defer { switchingAccountID = nil }
 
@@ -733,7 +686,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func addAccountViaLogin() async {
-        guard !handlePreviewInteraction() else { return }
         isLoggingIn = true
         defer { isLoggingIn = false }
 
@@ -747,7 +699,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func exportAccountsJSON() {
-        guard !handlePreviewInteraction() else { return }
         isExporting = true
         defer { isExporting = false }
 
@@ -760,7 +711,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func importAccountsJSON(from fileURL: URL) async {
-        guard !handlePreviewInteraction() else { return }
         isImporting = true
         defer { isImporting = false }
 
@@ -777,12 +727,7 @@ final class AccountSwitcherViewModel: ObservableObject {
         showError(message)
     }
 
-    func shouldPresentImportPicker() -> Bool {
-        !handlePreviewInteraction()
-    }
-
     func confirmDelete(_ account: AccountSummary) {
-        guard !handlePreviewInteraction() else { return }
         pendingDeletionAccount = account
     }
 
@@ -791,7 +736,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func confirmClearAllAccounts() {
-        guard !handlePreviewInteraction() else { return }
         let count = accounts.count
         guard count > 0 else { return }
         pendingClearAllAccountCount = count
@@ -802,7 +746,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func completeDeletion(of account: AccountSummary) async {
-        guard !handlePreviewInteraction() else { return }
         pendingDeletionAccount = nil
         deletingAccountID = account.id
         defer { deletingAccountID = nil }
@@ -817,7 +760,6 @@ final class AccountSwitcherViewModel: ObservableObject {
     }
 
     func clearAllAccounts() async {
-        guard !handlePreviewInteraction() else { return }
         pendingClearAllAccountCount = nil
         isClearingAccounts = true
         defer { isClearingAccounts = false }
@@ -835,12 +777,6 @@ final class AccountSwitcherViewModel: ObservableObject {
         self.notice = notice
         errorMessage = nil
         scheduleBannerDismissal()
-    }
-
-    private func handlePreviewInteraction() -> Bool {
-        guard isPreviewMode else { return false }
-        showNotice(.previewInteraction)
-        return true
     }
 
     private func showError(_ message: String) {
@@ -869,38 +805,6 @@ final class AccountSwitcherViewModel: ObservableObject {
         }
     }
 
-    private static var previewAccounts: [AccountSummary] {
-        [
-            AccountSummary(
-                id: "preview-current",
-                label: "Primary Workspace",
-                email: "studio-owner@example.com",
-                accountID: "acct_preview_current",
-                planType: "Plus",
-                teamName: "Studio",
-                usage: AccountUsage(
-                    fiveHour: UsageWindow(resetAt: Int64(Date().addingTimeInterval(90 * 60).timeIntervalSince1970), usedPercent: 28),
-                    oneWeek: UsageWindow(resetAt: Int64(Date().addingTimeInterval(3 * 24 * 60 * 60).timeIntervalSince1970), usedPercent: 54),
-                    planType: "Plus"
-                ),
-                isCurrent: true
-            ),
-            AccountSummary(
-                id: "preview-secondary",
-                label: "Client Sandbox",
-                email: "client-sandbox@example.com",
-                accountID: "acct_preview_secondary",
-                planType: "Team",
-                teamName: "Acme",
-                usage: AccountUsage(
-                    fiveHour: UsageWindow(resetAt: Int64(Date().addingTimeInterval(2 * 60 * 60).timeIntervalSince1970), usedPercent: 67),
-                    oneWeek: UsageWindow(resetAt: Int64(Date().addingTimeInterval(5 * 24 * 60 * 60).timeIntervalSince1970), usedPercent: 21),
-                    planType: "Team"
-                ),
-                isCurrent: false
-            )
-        ]
-    }
 }
 
 struct ContentView: View {
@@ -992,7 +896,6 @@ struct ContentView: View {
             }
         }
         .task {
-            guard !model.isPreviewMode else { return }
             model.startUsageAutoRefreshIfNeeded()
             await model.load()
         }
@@ -1247,7 +1150,6 @@ private struct ToolbarSettingsMenuButton: NSViewRepresentable {
 
         @objc func importJSON(_ sender: Any?) {
             Task { @MainActor in
-                guard self.parent.model.shouldPresentImportPicker() else { return }
                 self.parent.isImporterPresented = true
             }
         }
@@ -2065,6 +1967,6 @@ private func usageTimeFormatter(for language: AppLanguage) -> DateFormatter {
 }
 
 #Preview("codex-app-switcher") {
-    ContentView(model: AccountSwitcherViewModel(previewMode: true))
+    ContentView(model: AccountSwitcherViewModel())
         .frame(width: CodexAppSwitcherLayout.columnWidth, height: 760)
 }
