@@ -31,6 +31,7 @@ xcodebuild \
   -scheme "$SCHEME_NAME" \
   -configuration Release \
   -derivedDataPath "$DERIVED_DATA_DIR" \
+  -quiet \
   build
 
 if [[ ! -d "$BUILT_APP_PATH" ]]; then
