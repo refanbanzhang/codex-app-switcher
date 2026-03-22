@@ -28,33 +28,32 @@ struct AccountService: @unchecked Sendable {
         }
 
         var didChangeStore = false
-        let now = Int64(Date().timeIntervalSince1970)
 
         for index in store.accounts.indices {
             do {
-                let refreshed = try await usageService.refreshAccount(from: store.accounts[index].authJSON)
-
-                if store.accounts[index].authJSON != refreshed.authJSON {
-                    store.accounts[index].authJSON = refreshed.authJSON
-                    didChangeStore = true
-
-                    if store.accounts[index].accountID == currentAccountID {
-                        try? authRepository.writeCurrentAuth(refreshed.authJSON)
-                    }
-                }
-
-                store.accounts[index].usage = refreshed.usage
-                let trimmedPlanType = refreshed.planType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if !trimmedPlanType.isEmpty {
-                    store.accounts[index].planType = trimmedPlanType
-                }
-                store.accounts[index].updatedAt = now
-                didChangeStore = true
+                let changed = try await refreshUsage(in: &store, at: index, currentAccountID: currentAccountID)
+                didChangeStore = didChangeStore || changed
             } catch {
                 continue
             }
         }
 
+        if didChangeStore {
+            try storeRepository.save(store)
+        }
+
+        return summaries(from: store, currentAccountID: currentAccountID)
+    }
+
+    func refreshUsageForAccount(identifier: String) async throws -> [AccountSummary] {
+        var store = try storeRepository.loadOrEmpty()
+        let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID
+
+        guard let index = store.accounts.firstIndex(where: { $0.id == identifier || $0.accountID == identifier }) else {
+            throw CLIError("Account not found for identifier: \(identifier)")
+        }
+
+        let didChangeStore = try await refreshUsage(in: &store, at: index, currentAccountID: currentAccountID)
         if didChangeStore {
             try storeRepository.save(store)
         }
@@ -296,6 +295,26 @@ struct AccountService: @unchecked Sendable {
         }
 
         _ = try? upsertAccount(authJSON: currentAuth)
+    }
+
+    private func refreshUsage(in store: inout AccountStore, at index: Int, currentAccountID: String?) async throws -> Bool {
+        let refreshed = try await usageService.refreshAccount(from: store.accounts[index].authJSON)
+        let now = Int64(Date().timeIntervalSince1970)
+
+        if store.accounts[index].authJSON != refreshed.authJSON {
+            store.accounts[index].authJSON = refreshed.authJSON
+            if store.accounts[index].accountID == currentAccountID {
+                try? authRepository.writeCurrentAuth(refreshed.authJSON)
+            }
+        }
+
+        store.accounts[index].usage = refreshed.usage
+        let trimmedPlanType = refreshed.planType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedPlanType.isEmpty {
+            store.accounts[index].planType = trimmedPlanType
+        }
+        store.accounts[index].updatedAt = now
+        return true
     }
 
     @discardableResult

@@ -526,12 +526,17 @@ final class AccountSwitcherViewModel: ObservableObject {
     @Published var pendingClearAllAccountCount: Int?
     @Published var errorMessage: String?
     @Published fileprivate var notice: AppNotice?
-    @Published fileprivate private(set) var isUsageRefreshInFlight = false
+    @Published fileprivate private(set) var refreshingUsageAccountID: String?
+    @Published fileprivate private(set) var isBulkUsageRefreshInFlight = false
 
     private let accountService: AccountService
     private let codexAppController = CodexAppController()
     private var bannerDismissTask: Task<Void, Never>?
     private var loadGeneration: UInt64 = 0
+
+    var isUsageRefreshInFlight: Bool {
+        refreshingUsageAccountID != nil || isBulkUsageRefreshInFlight
+    }
 
     init() {
         do {
@@ -596,7 +601,7 @@ final class AccountSwitcherViewModel: ObservableObject {
             isLoading = false
             guard !loadedAccounts.isEmpty else { return }
 
-            await refreshUsageIfNeeded(applyForGeneration: generation)
+            await refreshCurrentUsageIfNeeded(applyForGeneration: generation)
         } catch {
             guard generation == loadGeneration else { return }
             isLoading = false
@@ -605,11 +610,44 @@ final class AccountSwitcherViewModel: ObservableObject {
         }
     }
 
-    private func refreshUsageIfNeeded(applyForGeneration generation: UInt64? = nil, showErrorIfFailed: Bool = false) async {
-        guard !isUsageRefreshInFlight else { return }
+    private func refreshCurrentUsageIfNeeded(applyForGeneration generation: UInt64? = nil) async {
+        guard let currentAccount = accounts.first(where: { $0.isCurrent }) else { return }
+        await refreshUsageIfNeeded(for: currentAccount.id, applyForGeneration: generation, showErrorIfFailed: false)
+    }
 
-        isUsageRefreshInFlight = true
-        defer { isUsageRefreshInFlight = false }
+    private func refreshUsageIfNeeded(for accountIdentifier: String, applyForGeneration generation: UInt64? = nil, showErrorIfFailed: Bool = false) async {
+        guard refreshingUsageAccountID == nil, !isBulkUsageRefreshInFlight else { return }
+
+        refreshingUsageAccountID = accountIdentifier
+        defer { refreshingUsageAccountID = nil }
+
+        do {
+            let refreshedAccounts = sortAccounts(try await accountService.refreshUsageForAccount(identifier: accountIdentifier))
+            guard generation == nil || generation == loadGeneration else { return }
+            accounts = refreshedAccounts
+        } catch {
+            if showErrorIfFailed {
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
+    func refreshUsageManually(for account: AccountSummary) async {
+        guard !isLoading else { return }
+
+        do {
+            try accountService.syncCurrentAuthAccountOnStartup()
+            await refreshUsageIfNeeded(for: account.id, applyForGeneration: loadGeneration, showErrorIfFailed: true)
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
+    private func refreshAllUsageIfNeeded(applyForGeneration generation: UInt64? = nil, showErrorIfFailed: Bool = false) async {
+        guard !isBulkUsageRefreshInFlight, refreshingUsageAccountID == nil else { return }
+
+        isBulkUsageRefreshInFlight = true
+        defer { isBulkUsageRefreshInFlight = false }
 
         do {
             let refreshedAccounts = sortAccounts(try await accountService.refreshUsageForAllAccounts())
@@ -627,7 +665,7 @@ final class AccountSwitcherViewModel: ObservableObject {
 
         do {
             try accountService.syncCurrentAuthAccountOnStartup()
-            await refreshUsageIfNeeded(applyForGeneration: loadGeneration, showErrorIfFailed: true)
+            await refreshAllUsageIfNeeded(applyForGeneration: loadGeneration, showErrorIfFailed: true)
         } catch {
             showError(error.localizedDescription)
         }
@@ -872,6 +910,12 @@ struct ContentView: View {
                                 copy: copy,
                                 isSwitching: model.switchingAccountID == account.id,
                                 isDeleting: model.deletingAccountID == account.id,
+                                isRefreshingUsage: model.refreshingUsageAccountID == account.id,
+                                onRefreshUsage: {
+                                    Task {
+                                        await model.refreshUsageManually(for: account)
+                                    }
+                                },
                                 onSwitch: {
                                     Task {
                                         await model.switchAccount(account)
@@ -1270,6 +1314,8 @@ private struct AccountCard: View {
     let copy: AppCopy
     let isSwitching: Bool
     let isDeleting: Bool
+    let isRefreshingUsage: Bool
+    let onRefreshUsage: () -> Void
     let onSwitch: () -> Void
     let onDelete: () -> Void
     @State private var revealsFullEmail = false
@@ -1308,49 +1354,80 @@ private struct AccountCard: View {
 
                 Spacer(minLength: 8)
 
-                if account.isCurrent {
-                    currentContextPill
-                } else {
+                HStack(spacing: 4) {
                     Button {
-                        onSwitch()
+                        onRefreshUsage()
                     } label: {
-                        HStack(spacing: 6) {
-                            if isSwitching {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .tint(StudioTheme.ink)
-                            } else {
-                                Image(systemName: "arrow.left.arrow.right")
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-
-                            if isSwitchButtonHovered {
-                                Text(copy.switchAction)
-                                    .font(StudioFont.label(10))
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                            }
+                        if isRefreshingUsage {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(StudioTheme.ink)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11, weight: .semibold))
+                                .frame(width: 14, height: 14)
                         }
-                        .foregroundStyle(StudioTheme.ink)
-                        .padding(.horizontal, isSwitchButtonHovered ? 12 : 10)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(StudioTheme.surfaceContainer)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
-                        )
                     }
                     .buttonStyle(.plain)
-                    .disabled(isSwitching || isDeleting)
-                    .onHover { hovering in
-                        isSwitchButtonHovered = hovering && !isSwitching && !isDeleting
+                    .foregroundStyle(StudioTheme.ink)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(StudioTheme.surfaceContainer)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
+                    )
+                    .disabled(isSwitching || isDeleting || isRefreshingUsage)
+                    .help(isRefreshingUsage ? copy.refreshingUsageAction : copy.refreshUsageAction)
+
+                    if account.isCurrent {
+                        currentContextPill
+                    } else {
+                        Button {
+                            onSwitch()
+                        } label: {
+                            HStack(spacing: 6) {
+                                if isSwitching {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .tint(StudioTheme.ink)
+                                } else {
+                                    Image(systemName: "arrow.left.arrow.right")
+                                        .font(.system(size: 11, weight: .semibold))
+                                }
+
+                                if isSwitchButtonHovered {
+                                    Text(copy.switchAction)
+                                        .font(StudioFont.label(10))
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                                }
+                            }
+                            .foregroundStyle(StudioTheme.ink)
+                            .padding(.horizontal, isSwitchButtonHovered ? 12 : 10)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(StudioTheme.surfaceContainer)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isSwitching || isDeleting || isRefreshingUsage)
+                        .onHover { hovering in
+                            isSwitchButtonHovered = hovering && !isSwitching && !isDeleting && !isRefreshingUsage
+                        }
+                        .help(copy.switchAction)
+                        .animation(.easeOut(duration: 0.16), value: isSwitchButtonHovered)
                     }
-                    .help(copy.switchAction)
-                    .animation(.easeOut(duration: 0.16), value: isSwitchButtonHovered)
                 }
             }
 
@@ -1378,7 +1455,7 @@ private struct AccountCard: View {
             } label: {
                 Label(isDeleting ? copy.deletingAccountMenu : copy.deleteAccountMenu, systemImage: "trash")
             }
-            .disabled(isSwitching || isDeleting || account.isCurrent)
+            .disabled(isSwitching || isDeleting || isRefreshingUsage || account.isCurrent)
         }
     }
 
@@ -1414,7 +1491,6 @@ private struct AccountCard: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(StudioTheme.currentAccountBorder.opacity(0.55), lineWidth: 1)
         )
-        .frame(maxWidth: 120, alignment: .trailing)
         .onHover { hovering in
             isCurrentPillHovered = hovering
         }
