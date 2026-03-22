@@ -444,6 +444,24 @@ private struct AppCopy {
             return "Settings"
         }
     }
+
+    var refreshUsageAction: String {
+        switch language {
+        case .chinese:
+            return "刷新"
+        case .english:
+            return "Refresh"
+        }
+    }
+
+    var refreshingUsageAction: String {
+        switch language {
+        case .chinese:
+            return "刷新中…"
+        case .english:
+            return "Refreshing…"
+        }
+    }
 }
 
 fileprivate enum AppNotice {
@@ -496,11 +514,6 @@ struct CodexAppSwitcherApp: App {
 
 @MainActor
 final class AccountSwitcherViewModel: ObservableObject {
-    private enum BackgroundUsageRefreshPolicy {
-        static let initialDelay: Duration = .milliseconds(700)
-        static let usageRefreshInterval: Duration = .seconds(30)
-    }
-
     @Published var accounts: [AccountSummary] = []
     @Published var isLoading = false
     @Published var isLoggingIn = false
@@ -513,12 +526,11 @@ final class AccountSwitcherViewModel: ObservableObject {
     @Published var pendingClearAllAccountCount: Int?
     @Published var errorMessage: String?
     @Published fileprivate var notice: AppNotice?
+    @Published fileprivate private(set) var isUsageRefreshInFlight = false
 
     private let accountService: AccountService
     private let codexAppController = CodexAppController()
     private var bannerDismissTask: Task<Void, Never>?
-    private var usageAutoRefreshTask: Task<Void, Never>?
-    private var isUsageRefreshInFlight = false
     private var loadGeneration: UInt64 = 0
 
     init() {
@@ -559,22 +571,6 @@ final class AccountSwitcherViewModel: ObservableObject {
 
     deinit {
         bannerDismissTask?.cancel()
-        usageAutoRefreshTask?.cancel()
-    }
-
-    func startUsageAutoRefreshIfNeeded() {
-        guard usageAutoRefreshTask == nil else { return }
-
-        usageAutoRefreshTask = Task { [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(for: BackgroundUsageRefreshPolicy.initialDelay)
-
-            while !Task.isCancelled {
-                try? await Task.sleep(for: BackgroundUsageRefreshPolicy.usageRefreshInterval)
-                guard !Task.isCancelled else { return }
-                await self.runAutomaticUsageRefreshTick()
-            }
-        }
     }
 
     func load(preserveNotice: Bool = false) async {
@@ -609,30 +605,7 @@ final class AccountSwitcherViewModel: ObservableObject {
         }
     }
 
-    private var canRunAutomaticUsageRefresh: Bool {
-        !isUsageRefreshInFlight
-            && !isLoading
-            && !isLoggingIn
-            && !isExporting
-            && !isImporting
-            && !isClearingAccounts
-            && switchingAccountID == nil
-            && deletingAccountID == nil
-    }
-
-    private func runAutomaticUsageRefreshTick() async {
-        guard canRunAutomaticUsageRefresh else { return }
-        let generation = loadGeneration
-
-        do {
-            try accountService.syncCurrentAuthAccountOnStartup()
-            await refreshUsageIfNeeded(applyForGeneration: generation)
-        } catch {
-            // Keep automatic refresh silent; manual actions still surface errors to the user.
-        }
-    }
-
-    private func refreshUsageIfNeeded(applyForGeneration generation: UInt64? = nil) async {
+    private func refreshUsageIfNeeded(applyForGeneration generation: UInt64? = nil, showErrorIfFailed: Bool = false) async {
         guard !isUsageRefreshInFlight else { return }
 
         isUsageRefreshInFlight = true
@@ -643,7 +616,20 @@ final class AccountSwitcherViewModel: ObservableObject {
             guard generation == nil || generation == loadGeneration else { return }
             accounts = refreshedAccounts
         } catch {
-            // Keep post-render refresh silent so the list is usable even if usage fails.
+            if showErrorIfFailed {
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
+    func refreshUsageManually() async {
+        guard !isLoading else { return }
+
+        do {
+            try accountService.syncCurrentAuthAccountOnStartup()
+            await refreshUsageIfNeeded(applyForGeneration: loadGeneration, showErrorIfFailed: true)
+        } catch {
+            showError(error.localizedDescription)
         }
     }
 
@@ -831,6 +817,7 @@ struct ContentView: View {
             || model.isExporting
             || model.isImporting
             || model.isClearingAccounts
+            || model.isUsageRefreshInFlight
             || model.switchingAccountID != nil
             || model.deletingAccountID != nil
     }
@@ -856,6 +843,17 @@ struct ContentView: View {
                             title: copy.themeButtonLabel(for: selectedTheme),
                             tint: StudioTheme.ink,
                             action: { storedTheme = selectedTheme.next.rawValue }
+                        )
+                        FooterUtilityButton(
+                            icon: "arrow.clockwise",
+                            title: model.isUsageRefreshInFlight ? copy.refreshingUsageAction : copy.refreshUsageAction,
+                            tint: StudioTheme.ink,
+                            isDisabled: accountActionBusy || model.accounts.isEmpty,
+                            action: {
+                                Task {
+                                    await model.refreshUsageManually()
+                                }
+                            }
                         )
                         utilitiesMenuButton
                     }
@@ -896,7 +894,6 @@ struct ContentView: View {
             }
         }
         .task {
-            model.startUsageAutoRefreshIfNeeded()
             await model.load()
         }
         .alert(
