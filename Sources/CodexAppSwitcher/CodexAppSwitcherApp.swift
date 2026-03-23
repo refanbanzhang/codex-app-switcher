@@ -2039,7 +2039,9 @@ private func usageTimeFormatter(for language: AppLanguage) -> DateFormatter {
     return formatter
 }
 
+#if ENABLE_PREVIEWS
 #Preview("codex-app-switcher") {
     ContentView(model: AccountSwitcherViewModel())
         .frame(width: CodexAppSwitcherLayout.columnWidth, height: 760)
 }
+#endif

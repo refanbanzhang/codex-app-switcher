@@ -19,7 +19,7 @@ A macOS utility to quickly switch Codex accounts and launch Codex.
 Requirements:
 
 - macOS
-- Xcode
+- Xcode, or Command Line Tools for Xcode
 
 Clone the repository and enter the project directory:
 
@@ -34,10 +34,25 @@ Build the `.app` from the repository root:
 ./scripts/package-app.sh
 ```
 
+If full Xcode is installed, the script uses `xcodebuild`.
+If only Command Line Tools are available, it falls back to `swiftc` and creates the app bundle manually.
+
 Build output:
 
 ```bash
 ./dist/codex-app-switcher.app
+```
+
+Build a `.dmg` installer:
+
+```bash
+./scripts/package-dmg.sh
+```
+
+DMG output:
+
+```bash
+./dist/codex-app-switcher.dmg
 ```
 
 Launch:
