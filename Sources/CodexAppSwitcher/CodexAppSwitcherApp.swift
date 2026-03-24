@@ -365,6 +365,15 @@ private struct AppCopy {
         }
     }
 
+    func resetsIn(hours: Int) -> String {
+        switch language {
+        case .chinese:
+            return "\(hours) 小时后重置"
+        case .english:
+            return "Resets in \(hours) hours"
+        }
+    }
+
     func resetsAt(_ dateText: String) -> String {
         switch language {
         case .chinese:
@@ -1300,7 +1309,7 @@ private enum AccountPlanKind {
         case .team:
             return .planTeam
         case .pro:
-            return .neutral
+            return .planPro
         case .enterprise:
             return .neutral
         case .unknown:
@@ -1319,8 +1328,6 @@ private struct AccountCard: View {
     let onSwitch: () -> Void
     let onDelete: () -> Void
     @State private var revealsFullEmail = false
-    @State private var isSwitchButtonHovered = false
-    @State private var isCurrentPillHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1382,6 +1389,7 @@ private struct AccountCard: View {
                             .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
                     )
                     .disabled(isSwitching || isDeleting || isRefreshingUsage)
+                    .hoverTooltip(isRefreshingUsage ? copy.refreshingUsageAction : copy.refreshUsageAction)
                     .help(isRefreshingUsage ? copy.refreshingUsageAction : copy.refreshUsageAction)
 
                     if account.isCurrent {
@@ -1399,17 +1407,9 @@ private struct AccountCard: View {
                                     Image(systemName: "arrow.left.arrow.right")
                                         .font(.system(size: 11, weight: .semibold))
                                 }
-
-                                if isSwitchButtonHovered {
-                                    Text(copy.switchAction)
-                                        .font(StudioFont.label(10))
-                                        .lineLimit(1)
-                                        .fixedSize(horizontal: true, vertical: false)
-                                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                                }
                             }
                             .foregroundStyle(StudioTheme.ink)
-                            .padding(.horizontal, isSwitchButtonHovered ? 12 : 10)
+                            .padding(.horizontal, 10)
                             .padding(.vertical, 8)
                             .background(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1422,11 +1422,8 @@ private struct AccountCard: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(isSwitching || isDeleting || isRefreshingUsage)
-                        .onHover { hovering in
-                            isSwitchButtonHovered = hovering && !isSwitching && !isDeleting && !isRefreshingUsage
-                        }
+                        .hoverTooltip(copy.switchAction)
                         .help(copy.switchAction)
-                        .animation(.easeOut(duration: 0.16), value: isSwitchButtonHovered)
                     }
                 }
             }
@@ -1436,17 +1433,18 @@ private struct AccountCard: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            GlassPanelBackground(
-                cornerRadius: 16,
-                fillOpacity: 0.7,
-                borderColor: StudioTheme.outlineVariant.opacity(0.1),
-                shadowRadius: 6
-            )
-        }
-        .overlay {
-            if account.isCurrent {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(StudioTheme.currentAccountBorder, lineWidth: 1.5)
+            ZStack {
+                GlassPanelBackground(
+                    cornerRadius: 16,
+                    fillOpacity: 0.7,
+                    borderColor: StudioTheme.outlineVariant.opacity(0.1),
+                    shadowRadius: 6
+                )
+
+                if account.isCurrent {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(StudioTheme.currentCardHighlight, lineWidth: 1.8)
+                }
             }
         }
         .contextMenu {
@@ -1473,29 +1471,20 @@ private struct AccountCard: View {
         HStack(spacing: 6) {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(StudioTheme.ink)
-
-            if isCurrentPillHovered {
-                Text(currentPillTitle)
-                    .font(StudioFont.label(10))
-                    .foregroundStyle(StudioTheme.ink)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
+                .foregroundStyle(StudioTheme.currentAccountPillForeground)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(StudioTheme.currentAccountBorder.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(StudioTheme.surfaceContainer)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(StudioTheme.currentAccountBorder.opacity(0.55), lineWidth: 1)
+                .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
         )
-        .onHover { hovering in
-            isCurrentPillHovered = hovering
-        }
+        .hoverTooltip(currentPillTitle)
         .help(currentPillTitle)
-        .animation(.easeOut(duration: 0.16), value: isCurrentPillHovered)
     }
 
     private var currentPillTitle: String {
@@ -1587,6 +1576,12 @@ private struct StitchUsageStrip: View {
                 if section == .fiveHour, let remaining, remaining >= 99.5 {
                     return ""
                 }
+                if section == .oneWeek,
+                   let remaining,
+                   remaining >= 99.5,
+                   let resetAt = window.resetAt {
+                    return relativeResetCaption(resetAt: resetAt, language: copy.language, copy: copy)
+                }
                 return copy.noActiveUsage
             }
             if let resetAt = window.resetAt {
@@ -1650,21 +1645,21 @@ private struct UsageMeterRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(sectionTitle)
-                    .font(StudioFont.label(11))
+                    .font(.system(size: 11, weight: .regular, design: .default))
                     .foregroundStyle(StudioTheme.accentFree)
 
                 Spacer(minLength: 8)
 
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(remainingHeadline)
-                        .font(StudioFont.label(11))
-                        .foregroundStyle(remainingHeadlineTint)
-
                     if !resetCaption.isEmpty {
                         Text(resetCaption)
-                            .font(StudioFont.caption(10))
+                            .font(.system(size: 11, weight: .regular, design: .default))
                             .foregroundStyle(StudioTheme.accentFree)
                     }
+
+                    Text(remainingHeadline)
+                        .font(.system(size: 11, weight: .regular, design: .default))
+                        .foregroundStyle(remainingHeadlineTint)
                 }
                 .multilineTextAlignment(.trailing)
             }
@@ -1687,22 +1682,24 @@ private struct UsageMeterRow: View {
 
 private func relativeResetCaption(resetAt: Int64, language: AppLanguage, copy: AppCopy) -> String {
     let date = Date(timeIntervalSince1970: TimeInterval(resetAt))
-    let calendar = Calendar.current
-    let startNow = calendar.startOfDay(for: Date())
-    let startTarget = calendar.startOfDay(for: date)
-    let days = calendar.dateComponents([.day], from: startNow, to: startTarget).day ?? 0
+    let secondsUntilReset = max(0, date.timeIntervalSinceNow)
+    let days = Int(secondsUntilReset / 86_400)
+
     if days > 0 {
         return copy.resetsIn(days: days)
     }
-    if days < 0 {
-        return copy.resetsAt(usageDateFormatter(for: language).string(from: date))
+
+    let hours = max(1, Int(ceil(secondsUntilReset / 3_600)))
+    if hours < 24 {
+        return copy.resetsIn(hours: hours)
     }
+
     return copy.resetsToday
 }
 
 private func absoluteResetCaption(resetAt: Int64, language: AppLanguage, copy: AppCopy) -> String {
     let date = Date(timeIntervalSince1970: TimeInterval(resetAt))
-    return copy.resetsAt(usageTimeFormatter(for: language).string(from: date))
+    return copy.resetsAt(usageDateTimeFormatter(for: language).string(from: date))
 }
 
 private enum StudioFont {
@@ -1861,20 +1858,11 @@ private struct FooterUtilityCapsuleLabel: View {
     let title: String
     let tint: Color
     var isDisabled: Bool = false
-    @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: isHovered ? 6 : 0) {
+        HStack(spacing: 0) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
-
-            if isHovered {
-                Text(title)
-                    .font(StudioFont.label(10))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
         }
         .foregroundStyle(isDisabled ? tint.opacity(0.45) : tint)
         .padding(.horizontal, 10)
@@ -1887,11 +1875,47 @@ private struct FooterUtilityCapsuleLabel: View {
             Capsule()
                 .stroke(StudioTheme.outlineVariant.opacity(isDisabled ? 0.08 : 0.14), lineWidth: 1)
         )
-        .onHover { hovering in
-            isHovered = hovering && !isDisabled
-        }
+        .hoverTooltip(title, isEnabled: !isDisabled)
         .help(title)
-        .animation(.easeOut(duration: 0.16), value: isHovered)
+    }
+}
+
+private struct HoverTooltipModifier: ViewModifier {
+    let text: String
+    var isEnabled: Bool = true
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                if isHovered && isEnabled && !text.isEmpty {
+                    Text(text)
+                        .font(.system(size: 11, weight: .regular, design: .default))
+                        .foregroundStyle(StudioTheme.ink)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(StudioTheme.tooltipFill)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(StudioTheme.tooltipBorder, lineWidth: 1)
+                        )
+                        .offset(y: -34)
+                        .fixedSize()
+                        .allowsHitTesting(false)
+                }
+            }
+            .onHover { hovering in
+                isHovered = hovering
+            }
+    }
+}
+
+private extension View {
+    func hoverTooltip(_ text: String, isEnabled: Bool = true) -> some View {
+        modifier(HoverTooltipModifier(text: text, isEnabled: isEnabled))
     }
 }
 
@@ -1949,9 +1973,9 @@ private enum StudioTheme {
     static let secondary = adaptive(light: .rgba(0.349, 0.373, 0.431), dark: .rgba(0.702, 0.729, 0.780))
     static let secondaryContainer = adaptive(light: .rgba(0.867, 0.886, 0.957), dark: .rgba(0.176, 0.204, 0.286))
     static let onSecondaryContainer = adaptive(light: .rgba(0.298, 0.322, 0.376), dark: .rgba(0.851, 0.878, 0.941))
-    static let tertiary = adaptive(light: .rgba(0.482, 0.322, 0.431), dark: .rgba(0.949, 0.690, 0.820))
-    static let tertiaryContainer = adaptive(light: .rgba(0.980, 0.773, 0.902), dark: .rgba(0.286, 0.184, 0.255))
-    static let onTertiaryContainer = adaptive(light: .rgba(0.388, 0.239, 0.345), dark: .rgba(0.988, 0.816, 0.922))
+    static let tertiary = adaptive(light: .rgba(0.749, 0.133, 0.490), dark: .rgba(1.0, 0.525, 0.831))
+    static let tertiaryContainer = adaptive(light: .rgba(1.0, 0.843, 0.937), dark: .rgba(0.357, 0.086, 0.239))
+    static let onTertiaryContainer = adaptive(light: .rgba(0.545, 0.078, 0.333), dark: .rgba(1.0, 0.792, 0.910))
     static let surfaceContainer = adaptive(light: .rgba(0.933, 0.929, 0.953), dark: .rgba(0.133, 0.149, 0.184))
     static let outlineVariant = adaptive(light: .rgba(0.694, 0.694, 0.725), dark: .rgba(0.365, 0.396, 0.463))
     static let success = adaptive(light: .rgba(0.164, 0.498, 0.334), dark: .rgba(0.482, 0.839, 0.663))
@@ -1965,24 +1989,27 @@ private enum StudioTheme {
     static let footerTopBorder = adaptive(light: .rgba(0.88, 0.89, 0.92, 0.35), dark: .rgba(0.267, 0.294, 0.361, 0.55))
     static let footerShadow = adaptive(light: .rgba(0.0, 0.0, 0.0, 0.05), dark: .rgba(0.0, 0.0, 0.0, 0.34))
     static let panelFill = adaptive(light: .rgba(1.0, 1.0, 1.0), dark: .rgba(0.082, 0.090, 0.118))
-    static let currentAccountBorder = adaptive(light: .rgba(0.48, 0.50, 0.55, 0.72), dark: .rgba(0.68, 0.71, 0.76, 0.72))
+    static let tooltipFill = adaptive(light: .rgba(1.0, 1.0, 1.0, 0.96), dark: .rgba(0.118, 0.129, 0.165, 0.96))
+    static let tooltipBorder = adaptive(light: .rgba(0.694, 0.694, 0.725, 0.32), dark: .rgba(0.627, 0.651, 0.706, 0.28))
+    static let currentCardHighlight = adaptive(light: .rgba(0.255, 0.471, 0.969, 0.92), dark: .rgba(0.569, 0.741, 1.000, 0.88))
+    static let currentAccountPillForeground = adaptive(light: .rgba(0.208, 0.247, 0.333), dark: .rgba(0.933, 0.945, 0.976))
 
     /// 非当前账号用量条：与 plan 标签同色相，便于一眼对应档位
-    static let accentFree = adaptive(light: .rgba(0.48, 0.50, 0.55), dark: .rgba(0.68, 0.71, 0.76))
-    static let accentPlus = adaptive(light: .rgba(0.0, 0.50, 0.42), dark: .rgba(0.48, 0.93, 0.82))
-    static let accentTeamPlan = adaptive(light: .rgba(0.14, 0.22, 0.68), dark: .rgba(0.62, 0.70, 1.0))
+    static let accentFree = adaptive(light: .rgba(0.278, 0.333, 0.431), dark: .rgba(0.761, 0.808, 0.886))
+    static let accentPlus = adaptive(light: .rgba(0.000, 0.620, 0.471), dark: .rgba(0.420, 1.000, 0.804))
+    static let accentTeamPlan = adaptive(light: .rgba(0.133, 0.349, 0.886), dark: .rgba(0.557, 0.733, 1.000))
     static let accentEnterprise = adaptive(light: .rgba(0.62, 0.42, 0.12), dark: .rgba(0.925, 0.733, 0.451))
     static let workspaceTeamBackground = adaptive(light: .rgba(0.89, 0.95, 1.0), dark: .rgba(0.137, 0.235, 0.365))
     static let workspaceTeamForeground = adaptive(light: .rgba(0.15, 0.39, 0.92), dark: .rgba(0.612, 0.796, 1.0))
-    /// Free：中性灰，避免与 Plus 青绿、Team 靛蓝混成「一片浅蓝」
-    static let planFreeBackground = adaptive(light: .rgba(0.92, 0.93, 0.94), dark: .rgba(0.16, 0.17, 0.20))
-    static let planFreeForeground = adaptive(light: .rgba(0.36, 0.38, 0.42), dark: .rgba(0.74, 0.77, 0.82))
-    /// Plus：偏青绿轴，与 Team 的蓝色轴拉开
-    static let planPlusBackground = adaptive(light: .rgba(0.78, 0.96, 0.90), dark: .rgba(0.08, 0.24, 0.22))
-    static let planPlusForeground = adaptive(light: .rgba(0.0, 0.50, 0.42), dark: .rgba(0.48, 0.93, 0.82))
-    /// Team：偏靛蓝 / 紫蓝，与 Plus 的青绿明显不同
-    static let planTeamBackground = adaptive(light: .rgba(0.84, 0.87, 1.0), dark: .rgba(0.14, 0.16, 0.38))
-    static let planTeamForeground = adaptive(light: .rgba(0.14, 0.22, 0.68), dark: .rgba(0.62, 0.70, 1.0))
+    /// Free：冷灰蓝，提高识别度但保留基础档位的克制感
+    static let planFreeBackground = adaptive(light: .rgba(0.851, 0.906, 0.984), dark: .rgba(0.114, 0.169, 0.267))
+    static let planFreeForeground = adaptive(light: .rgba(0.278, 0.333, 0.431), dark: .rgba(0.761, 0.808, 0.886))
+    /// Plus：高饱和青绿，作为最活跃的升级色
+    static let planPlusBackground = adaptive(light: .rgba(0.773, 1.000, 0.918), dark: .rgba(0.000, 0.275, 0.212))
+    static let planPlusForeground = adaptive(light: .rgba(0.000, 0.620, 0.471), dark: .rgba(0.420, 1.000, 0.804))
+    /// Team：高亮钴蓝，和工作区蓝相近但更偏订阅标签风格
+    static let planTeamBackground = adaptive(light: .rgba(0.831, 0.902, 1.000), dark: .rgba(0.090, 0.180, 0.420))
+    static let planTeamForeground = adaptive(light: .rgba(0.133, 0.349, 0.886), dark: .rgba(0.557, 0.733, 1.000))
     static let planEnterpriseBackground = adaptive(light: .rgba(1.0, 0.95, 0.88), dark: .rgba(0.322, 0.227, 0.102))
     static let planEnterpriseForeground = adaptive(light: .rgba(0.45, 0.30, 0.08), dark: .rgba(1.0, 0.859, 0.624))
 
@@ -2025,17 +2052,10 @@ private enum StudioTheme {
     }
 }
 
-private func usageDateFormatter(for language: AppLanguage) -> DateFormatter {
+private func usageDateTimeFormatter(for language: AppLanguage) -> DateFormatter {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: language.localeIdentifier)
-    formatter.dateFormat = "MM-dd HH:mm"
-    return formatter
-}
-
-private func usageTimeFormatter(for language: AppLanguage) -> DateFormatter {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: language.localeIdentifier)
-    formatter.dateFormat = "HH:mm"
+    formatter.dateFormat = "M-d HH:mm"
     return formatter
 }
 
