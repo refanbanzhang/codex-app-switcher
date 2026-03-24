@@ -54,6 +54,7 @@ manual_build() {
   xcrun swiftc \
     -sdk "$sdk_path" \
     -target "$(uname -m)-apple-macos${MIN_MACOS_VERSION}" \
+    -DNO_PREVIEWS \
     -O \
     Sources/CodexAppSwitcher/*.swift \
     -o "$executable_path"
