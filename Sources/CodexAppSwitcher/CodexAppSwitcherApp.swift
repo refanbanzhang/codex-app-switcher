@@ -895,6 +895,7 @@ struct ContentView: View {
                             icon: "arrow.clockwise",
                             title: model.isUsageRefreshInFlight ? copy.refreshingUsageAction : copy.refreshUsageAction,
                             tint: StudioTheme.ink,
+                            isLoading: model.isUsageRefreshInFlight,
                             isDisabled: accountActionBusy || model.accounts.isEmpty,
                             action: {
                                 Task {
@@ -1857,12 +1858,20 @@ private struct FooterUtilityCapsuleLabel: View {
     let icon: String
     let title: String
     let tint: Color
+    var isLoading: Bool = false
     var isDisabled: Bool = false
 
     var body: some View {
         HStack(spacing: 0) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(isDisabled ? tint.opacity(0.45) : tint)
+                    .frame(width: 13, height: 13)
+            } else {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+            }
         }
         .foregroundStyle(isDisabled ? tint.opacity(0.45) : tint)
         .padding(.horizontal, 10)
@@ -1923,12 +1932,19 @@ private struct FooterUtilityButton: View {
     let icon: String
     let title: String
     let tint: Color
+    var isLoading: Bool = false
     var isDisabled: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            FooterUtilityCapsuleLabel(icon: icon, title: title, tint: tint, isDisabled: isDisabled)
+            FooterUtilityCapsuleLabel(
+                icon: icon,
+                title: title,
+                tint: tint,
+                isLoading: isLoading,
+                isDisabled: isDisabled
+            )
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
