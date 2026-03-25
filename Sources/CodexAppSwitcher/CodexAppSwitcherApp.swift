@@ -883,12 +883,14 @@ struct ContentView: View {
                             icon: "globe",
                             title: copy.languageButtonLabel,
                             tint: StudioTheme.ink,
+                            tooltipPlacement: .bottom,
                             action: { storedLanguage = language.next.rawValue }
                         )
                         FooterUtilityButton(
                             icon: selectedTheme == .light ? "moon.stars" : "sun.max",
                             title: copy.themeButtonLabel(for: selectedTheme),
                             tint: StudioTheme.ink,
+                            tooltipPlacement: .bottom,
                             action: { storedTheme = selectedTheme.next.rawValue }
                         )
                         FooterUtilityButton(
@@ -897,6 +899,7 @@ struct ContentView: View {
                             tint: StudioTheme.ink,
                             isLoading: model.isUsageRefreshInFlight,
                             isDisabled: accountActionBusy || model.accounts.isEmpty,
+                            tooltipPlacement: .bottom,
                             action: {
                                 Task {
                                     await model.refreshUsageManually()
@@ -906,6 +909,7 @@ struct ContentView: View {
                         utilitiesMenuButton
                     }
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    .zIndex(10)
 
                     banner
 
@@ -1089,7 +1093,8 @@ private struct ToolbarSettingsMenuButton: NSViewRepresentable {
             rootView: FooterUtilityCapsuleLabel(
                 icon: "gearshape",
                 title: copy.settingsMenuLabel,
-                tint: StudioTheme.ink
+                tint: StudioTheme.ink,
+                tooltipPlacement: .bottom
             )
         )
         hosting.translatesAutoresizingMaskIntoConstraints = false
@@ -1130,7 +1135,8 @@ private struct ToolbarSettingsMenuButton: NSViewRepresentable {
         context.coordinator.hostingView?.rootView = FooterUtilityCapsuleLabel(
             icon: "gearshape",
             title: copy.settingsMenuLabel,
-            tint: StudioTheme.ink
+            tint: StudioTheme.ink,
+            tooltipPlacement: .bottom
         )
         context.coordinator.button?.menu = context.coordinator.rebuildMenu()
         nsView.invalidateIntrinsicContentSize()
@@ -1860,6 +1866,7 @@ private struct FooterUtilityCapsuleLabel: View {
     let tint: Color
     var isLoading: Bool = false
     var isDisabled: Bool = false
+    var tooltipPlacement: HoverTooltipModifier.Placement = .top
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1884,19 +1891,25 @@ private struct FooterUtilityCapsuleLabel: View {
             Capsule()
                 .stroke(StudioTheme.outlineVariant.opacity(isDisabled ? 0.08 : 0.14), lineWidth: 1)
         )
-        .hoverTooltip(title, isEnabled: !isDisabled)
+        .hoverTooltip(title, placement: tooltipPlacement, isEnabled: !isDisabled)
         .help(title)
     }
 }
 
 private struct HoverTooltipModifier: ViewModifier {
+    enum Placement {
+        case top
+        case bottom
+    }
+
     let text: String
+    var placement: Placement = .top
     var isEnabled: Bool = true
     @State private var isHovered = false
 
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .top) {
+            .overlay(alignment: placement == .top ? .top : .bottom) {
                 if isHovered && isEnabled && !text.isEmpty {
                     Text(text)
                         .font(.system(size: 11, weight: .regular, design: .default))
@@ -1911,7 +1924,7 @@ private struct HoverTooltipModifier: ViewModifier {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .stroke(StudioTheme.tooltipBorder, lineWidth: 1)
                         )
-                        .offset(y: -34)
+                        .offset(y: placement == .top ? -34 : 34)
                         .fixedSize()
                         .allowsHitTesting(false)
                 }
@@ -1923,8 +1936,12 @@ private struct HoverTooltipModifier: ViewModifier {
 }
 
 private extension View {
-    func hoverTooltip(_ text: String, isEnabled: Bool = true) -> some View {
-        modifier(HoverTooltipModifier(text: text, isEnabled: isEnabled))
+    func hoverTooltip(
+        _ text: String,
+        placement: HoverTooltipModifier.Placement = .top,
+        isEnabled: Bool = true
+    ) -> some View {
+        modifier(HoverTooltipModifier(text: text, placement: placement, isEnabled: isEnabled))
     }
 }
 
@@ -1934,6 +1951,7 @@ private struct FooterUtilityButton: View {
     let tint: Color
     var isLoading: Bool = false
     var isDisabled: Bool = false
+    var tooltipPlacement: HoverTooltipModifier.Placement = .top
     let action: () -> Void
 
     var body: some View {
@@ -1943,7 +1961,8 @@ private struct FooterUtilityButton: View {
                 title: title,
                 tint: tint,
                 isLoading: isLoading,
-                isDisabled: isDisabled
+                isDisabled: isDisabled,
+                tooltipPlacement: tooltipPlacement
             )
         }
         .buttonStyle(.plain)
