@@ -97,6 +97,14 @@ struct AccountSummary: Identifiable {
         usage?.oneWeek?.remainingPercent
     }
 
+    var oneWeekUsedPercent: Double? {
+        usage?.oneWeek?.usedPercent
+    }
+
+    var visibleResetAt: Int64? {
+        usage?.oneWeek?.resetAt
+    }
+
 }
 
 private extension String {
@@ -139,5 +147,14 @@ struct UsageWindow: Codable {
             return nil
         }
         return min(max(100 - usedPercent, 0), 100)
+    }
+
+    var hidesResetCaptionForFiveHour: Bool {
+        guard let usedPercent, usedPercent <= 0.01,
+              let remainingPercent,
+              remainingPercent >= 99.5 else {
+            return false
+        }
+        return true
     }
 }

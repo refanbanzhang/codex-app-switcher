@@ -61,6 +61,15 @@ private enum AppTheme: String {
     }
 }
 
+enum AccountSortOption: String, CaseIterable {
+    case resetAtAscending
+    case resetAtDescending
+    case oneWeekUsageAscending
+    case oneWeekUsageDescending
+
+    static let storageKey = "accounts.sortOption"
+}
+
 private struct AppCopy {
     let language: AppLanguage
 
@@ -310,6 +319,36 @@ private struct AppCopy {
         }
     }
 
+    var sortMenuLabel: String {
+        switch language {
+        case .chinese:
+            return "排序"
+        case .english:
+            return "Sort"
+        }
+    }
+
+    func sortOptionLabel(_ option: AccountSortOption) -> String {
+        switch (language, option) {
+        case (.chinese, .resetAtAscending):
+            return "重置时间 ↑"
+        case (.chinese, .resetAtDescending):
+            return "重置时间 ↓"
+        case (.chinese, .oneWeekUsageAscending):
+            return "周用量 ↑"
+        case (.chinese, .oneWeekUsageDescending):
+            return "周用量 ↓"
+        case (.english, .resetAtAscending):
+            return "Reset Time ↑"
+        case (.english, .resetAtDescending):
+            return "Reset Time ↓"
+        case (.english, .oneWeekUsageAscending):
+            return "Weekly Usage ↑"
+        case (.english, .oneWeekUsageDescending):
+            return "Weekly Usage ↓"
+        }
+    }
+
     var syncing: String {
         switch language {
         case .chinese:
@@ -524,6 +563,7 @@ struct CodexAppSwitcherApp: App {
 @MainActor
 final class AccountSwitcherViewModel: ObservableObject {
     @Published var accounts: [AccountSummary] = []
+    @Published private(set) var sortOption: AccountSortOption = .resetAtAscending
     @Published var isLoading = false
     @Published var isLoggingIn = false
     @Published var isExporting = false
@@ -682,25 +722,38 @@ final class AccountSwitcherViewModel: ObservableObject {
 
     private func sortAccounts(_ accounts: [AccountSummary]) -> [AccountSummary] {
         accounts.sorted { lhs, rhs in
-            let lhsHasUsage = lhs.fiveHourRemainingPercent != nil || lhs.oneWeekRemainingPercent != nil
-            let rhsHasUsage = rhs.fiveHourRemainingPercent != nil || rhs.oneWeekRemainingPercent != nil
-            if lhsHasUsage != rhsHasUsage {
-                return lhsHasUsage && !rhsHasUsage
+            switch sortOption {
+            case .resetAtAscending:
+                return compareOptional(lhs.visibleResetAt, rhs.visibleResetAt, ascending: true)
+            case .resetAtDescending:
+                return compareOptional(lhs.visibleResetAt, rhs.visibleResetAt, ascending: false)
+            case .oneWeekUsageAscending:
+                return compareOptional(lhs.oneWeekUsedPercent, rhs.oneWeekUsedPercent, ascending: true)
+            case .oneWeekUsageDescending:
+                return compareOptional(lhs.oneWeekUsedPercent, rhs.oneWeekUsedPercent, ascending: false)
             }
+        }
+    }
 
-            let lhsOneWeek = lhs.oneWeekRemainingPercent ?? -1
-            let rhsOneWeek = rhs.oneWeekRemainingPercent ?? -1
-            if lhsOneWeek != rhsOneWeek {
-                return lhsOneWeek > rhsOneWeek
+    func updateSortOption(_ option: AccountSortOption) {
+        guard sortOption != option else { return }
+        sortOption = option
+        accounts = sortAccounts(accounts)
+    }
+
+    private func compareOptional<Value: Comparable>(_ lhs: Value?, _ rhs: Value?, ascending: Bool) -> Bool {
+        switch (lhs, rhs) {
+        case let (lhsValue?, rhsValue?):
+            if lhsValue == rhsValue {
+                return false
             }
-
-            let lhsFiveHour = lhs.fiveHourRemainingPercent ?? -1
-            let rhsFiveHour = rhs.fiveHourRemainingPercent ?? -1
-            if lhsFiveHour != rhsFiveHour {
-                return lhsFiveHour > rhsFiveHour
-            }
-
-            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+            return ascending ? lhsValue < rhsValue : lhsValue > rhsValue
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        case (nil, nil):
+            return false
         }
     }
 
@@ -844,6 +897,7 @@ struct ContentView: View {
     @ObservedObject var model: AccountSwitcherViewModel
     @AppStorage(AppLanguage.storageKey) private var storedLanguage = AppLanguage.chinese.rawValue
     @AppStorage(AppTheme.storageKey) private var storedTheme = AppTheme.light.rawValue
+    @AppStorage(AccountSortOption.storageKey) private var storedSortOption = AccountSortOption.resetAtAscending.rawValue
     @State private var isImporterPresented = false
 
     private var language: AppLanguage {
@@ -856,6 +910,10 @@ struct ContentView: View {
 
     private var copy: AppCopy {
         AppCopy(language: language)
+    }
+
+    private var selectedSortOption: AccountSortOption {
+        AccountSortOption(rawValue: storedSortOption) ?? .resetAtAscending
     }
 
     private var accountActionBusy: Bool {
@@ -879,6 +937,7 @@ struct ContentView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 16) {
                     HStack(spacing: 8) {
+                        sortMenu
                         FooterUtilityButton(
                             icon: "globe",
                             title: copy.languageButtonLabel,
@@ -952,7 +1011,11 @@ struct ContentView: View {
             }
         }
         .task {
+            model.updateSortOption(selectedSortOption)
             await model.load()
+        }
+        .onChange(of: storedSortOption) { _, newValue in
+            model.updateSortOption(AccountSortOption(rawValue: newValue) ?? .resetAtAscending)
         }
         .alert(
             copy.deleteAccountTitle,
@@ -1042,6 +1105,123 @@ struct ContentView: View {
         )
         .fixedSize(horizontal: true, vertical: false)
         .layoutPriority(1)
+    }
+
+    private var sortMenu: some View {
+        SortMenuButton(
+            selectedSortOption: $storedSortOption,
+            copy: copy
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
+    }
+}
+
+private struct SortMenuButton: NSViewRepresentable {
+    @Binding var selectedSortOption: String
+    let copy: AppCopy
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.parent = self
+        let container = NSView()
+        let hosting = NSHostingView(
+            rootView: FooterUtilityCapsuleLabel(
+                icon: "arrow.up.arrow.down",
+                title: "\(copy.sortMenuLabel): \(copy.sortOptionLabel(currentSortOption))",
+                tint: StudioTheme.ink,
+                tooltipPlacement: .bottom
+            )
+        )
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(hosting)
+
+        let button = NSButton()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.bezelStyle = .shadowlessSquare
+        button.isBordered = false
+        button.title = ""
+        button.setButtonType(.momentaryPushIn)
+        button.focusRingType = .none
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.showMenu(_:))
+        button.sendAction(on: [.leftMouseUp])
+        button.menu = context.coordinator.rebuildMenu()
+        container.addSubview(button)
+
+        context.coordinator.hostingView = hosting
+        context.coordinator.button = button
+
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: container.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            button.topAnchor.constraint(equalTo: container.topAnchor),
+            button.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        return container
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.hostingView?.rootView = FooterUtilityCapsuleLabel(
+            icon: "arrow.up.arrow.down",
+            title: "\(copy.sortMenuLabel): \(copy.sortOptionLabel(currentSortOption))",
+            tint: StudioTheme.ink,
+            tooltipPlacement: .bottom
+        )
+        context.coordinator.button?.menu = context.coordinator.rebuildMenu()
+        nsView.invalidateIntrinsicContentSize()
+    }
+
+    private var currentSortOption: AccountSortOption {
+        AccountSortOption(rawValue: selectedSortOption) ?? .resetAtAscending
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var parent: SortMenuButton!
+        weak var hostingView: NSHostingView<FooterUtilityCapsuleLabel>?
+        weak var button: NSButton?
+
+        func rebuildMenu() -> NSMenu {
+            let menu = NSMenu()
+            guard let parent else {
+                return menu
+            }
+
+            let currentSortOption = AccountSortOption(rawValue: parent.selectedSortOption) ?? .resetAtAscending
+            for option in AccountSortOption.allCases {
+                let item = NSMenuItem(
+                    title: parent.copy.sortOptionLabel(option),
+                    action: #selector(selectSortOption(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = option.rawValue
+                item.state = option == currentSortOption ? .on : .off
+                menu.addItem(item)
+            }
+
+            return menu
+        }
+
+        @objc func selectSortOption(_ sender: NSMenuItem) {
+            guard let rawValue = sender.representedObject as? String else { return }
+            parent.selectedSortOption = rawValue
+        }
+
+        @objc func showMenu(_ sender: NSButton) {
+            guard let menu = sender.menu else { return }
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
+        }
     }
 }
 
@@ -1580,7 +1760,7 @@ private struct StitchUsageStrip: View {
         let progress = max(0, min(remaining ?? 0, 100)) / 100
         let resetCaption: String = {
             if let used = window.usedPercent, used <= 0.01 {
-                if section == .fiveHour, let remaining, remaining >= 99.5 {
+                if section == .fiveHour, window.hidesResetCaptionForFiveHour {
                     return ""
                 }
                 if section == .oneWeek,
@@ -1864,12 +2044,13 @@ private struct FooterUtilityCapsuleLabel: View {
     let icon: String
     let title: String
     let tint: Color
+    var visibleTitle: String? = nil
     var isLoading: Bool = false
     var isDisabled: Bool = false
     var tooltipPlacement: HoverTooltipModifier.Placement = .top
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             if isLoading {
                 ProgressView()
                     .controlSize(.small)
@@ -1878,6 +2059,12 @@ private struct FooterUtilityCapsuleLabel: View {
             } else {
                 Image(systemName: icon)
                     .font(.system(size: 13, weight: .semibold))
+            }
+
+            if let visibleTitle, !visibleTitle.isEmpty {
+                Text(visibleTitle)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
             }
         }
         .foregroundStyle(isDisabled ? tint.opacity(0.45) : tint)

@@ -377,12 +377,6 @@ struct AccountService: @unchecked Sendable {
                     isCurrent: account.accountID == currentAccountID
                 )
             }
-            .sorted { left, right in
-                if left.isCurrent != right.isCurrent {
-                    return left.isCurrent
-                }
-                return left.displayName.localizedCaseInsensitiveCompare(right.displayName) == .orderedAscending
-            }
     }
 }
 
