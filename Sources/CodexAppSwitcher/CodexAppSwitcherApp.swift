@@ -1751,6 +1751,10 @@ private struct AccountCard: View {
                         if let teamName = account.teamName, !teamName.isEmpty {
                             StitchChip(text: teamName.uppercased(), style: .neutral)
                         }
+
+                        if let note = account.trimmedNote {
+                            StitchChip(text: note, style: .neutral)
+                        }
                     }
                 }
                 .frame(minWidth: 0, alignment: .leading)
@@ -1767,14 +1771,6 @@ private struct AccountCard: View {
                         switchButton
                     }
                 }
-            }
-
-            if let note = account.trimmedNote {
-                Text(note)
-                    .font(.system(size: 12))
-                    .foregroundStyle(StudioTheme.muted)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             StitchUsageStrip(account: account, copy: copy)
