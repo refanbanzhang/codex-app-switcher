@@ -510,6 +510,25 @@ private struct AppCopy {
             return "Refreshing…"
         }
     }
+
+    func partialUsageRefreshFailure(_ failedAccountNames: [String]) -> String {
+        let count = failedAccountNames.count
+        let previewLimit = 3
+        let preview = failedAccountNames.prefix(previewLimit).joined(separator: language == .chinese ? "、" : ", ")
+
+        switch language {
+        case .chinese:
+            if count <= previewLimit {
+                return "以下账号刷新失败，卡片信息未完全更新：\(preview)"
+            }
+            return "有 \(count) 个账号刷新失败，卡片信息未完全更新：\(preview) 等"
+        case .english:
+            if count <= previewLimit {
+                return "Some cards were not updated because these accounts failed to refresh: \(preview)."
+            }
+            return "Some cards were not updated because \(count) accounts failed to refresh: \(preview), and more."
+        }
+    }
 }
 
 fileprivate enum AppNotice {
@@ -582,6 +601,12 @@ final class AccountSwitcherViewModel: ObservableObject {
     private let codexAppController = CodexAppController()
     private var bannerDismissTask: Task<Void, Never>?
     private var loadGeneration: UInt64 = 0
+
+    private var copy: AppCopy {
+        let storedLanguage = UserDefaults.standard.string(forKey: AppLanguage.storageKey)
+        let language = AppLanguage(rawValue: storedLanguage ?? "") ?? .chinese
+        return AppCopy(language: language)
+    }
 
     var isUsageRefreshInFlight: Bool {
         refreshingUsageAccountID != nil || isBulkUsageRefreshInFlight
@@ -699,9 +724,13 @@ final class AccountSwitcherViewModel: ObservableObject {
         defer { isBulkUsageRefreshInFlight = false }
 
         do {
-            let refreshedAccounts = sortAccounts(try await accountService.refreshUsageForAllAccounts())
+            let result = try await accountService.refreshUsageForAllAccounts()
+            let refreshedAccounts = sortAccounts(result.accounts)
             guard generation == nil || generation == loadGeneration else { return }
             accounts = refreshedAccounts
+            if showErrorIfFailed, !result.failedAccountNames.isEmpty {
+                showError(copy.partialUsageRefreshFailure(result.failedAccountNames))
+            }
         } catch {
             if showErrorIfFailed {
                 showError(error.localizedDescription)
@@ -983,7 +1012,7 @@ struct ContentView: View {
                                 copy: copy,
                                 isSwitching: model.switchingAccountID == account.id,
                                 isDeleting: model.deletingAccountID == account.id,
-                                isRefreshingUsage: model.refreshingUsageAccountID == account.id,
+                                isRefreshingUsage: model.isBulkUsageRefreshInFlight || model.refreshingUsageAccountID == account.id,
                                 onRefreshUsage: {
                                     Task {
                                         await model.refreshUsageManually(for: account)
@@ -1552,29 +1581,32 @@ private struct AccountCard: View {
                     Button {
                         onRefreshUsage()
                     } label: {
-                        if isRefreshingUsage {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(StudioTheme.ink)
-                                .frame(width: 14, height: 14)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 11, weight: .semibold))
-                                .frame(width: 14, height: 14)
+                        Group {
+                            if isRefreshingUsage {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(StudioTheme.ink)
+                                    .frame(width: 14, height: 14)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .frame(width: 14, height: 14)
+                            }
                         }
+                        .foregroundStyle(StudioTheme.ink)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(StudioTheme.surfaceContainer)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(StudioTheme.ink)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(StudioTheme.surfaceContainer)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
-                    )
                     .disabled(isSwitching || isDeleting || isRefreshingUsage)
                     .hoverTooltip(isRefreshingUsage ? copy.refreshingUsageAction : copy.refreshUsageAction)
                     .help(isRefreshingUsage ? copy.refreshingUsageAction : copy.refreshUsageAction)

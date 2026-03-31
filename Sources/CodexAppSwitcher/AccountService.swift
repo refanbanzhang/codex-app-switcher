@@ -19,21 +19,23 @@ struct AccountService: @unchecked Sendable {
         return summaries(from: store, currentAccountID: currentAccountID)
     }
 
-    func refreshUsageForAllAccounts() async throws -> [AccountSummary] {
+    func refreshUsageForAllAccounts() async throws -> BulkUsageRefreshResult {
         var store = try storeRepository.loadOrEmpty()
         let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID
 
         guard !store.accounts.isEmpty else {
-            return []
+            return BulkUsageRefreshResult(accounts: [], failedAccountNames: [])
         }
 
         var didChangeStore = false
+        var failedAccountNames: [String] = []
 
         for index in store.accounts.indices {
             do {
                 let changed = try await refreshUsage(in: &store, at: index, currentAccountID: currentAccountID)
                 didChangeStore = didChangeStore || changed
             } catch {
+                failedAccountNames.append(displayName(for: store.accounts[index]))
                 continue
             }
         }
@@ -42,7 +44,10 @@ struct AccountService: @unchecked Sendable {
             try storeRepository.save(store)
         }
 
-        return summaries(from: store, currentAccountID: currentAccountID)
+        return BulkUsageRefreshResult(
+            accounts: summaries(from: store, currentAccountID: currentAccountID),
+            failedAccountNames: failedAccountNames
+        )
     }
 
     func refreshUsageForAccount(identifier: String) async throws -> [AccountSummary] {
@@ -378,11 +383,30 @@ struct AccountService: @unchecked Sendable {
                 )
             }
     }
+
+    private func displayName(for account: StoredAccount) -> String {
+        let trimmedLabel = account.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedLabel.isEmpty {
+            return trimmedLabel
+        }
+
+        let trimmedEmail = account.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedEmail.isEmpty {
+            return trimmedEmail
+        }
+
+        return account.accountID
+    }
 }
 
 struct AccountsExportResult {
     let fileURL: URL
     let accountCount: Int
+}
+
+struct BulkUsageRefreshResult {
+    let accounts: [AccountSummary]
+    let failedAccountNames: [String]
 }
 
 struct AccountsImportResult {
