@@ -85,9 +85,11 @@ struct AccountService: @unchecked Sendable {
             id: summary.id,
             label: summary.label,
             email: summary.email,
+            note: summary.note,
             accountID: summary.accountID,
             planType: summary.planType,
             teamName: summary.teamName,
+            usage: summary.usage,
             isCurrent: true
         )
     }
@@ -113,6 +115,7 @@ struct AccountService: @unchecked Sendable {
             id: account.id,
             label: account.label,
             email: account.email,
+            note: account.note,
             accountID: account.accountID,
             planType: account.planType,
             teamName: account.teamName,
@@ -144,12 +147,29 @@ struct AccountService: @unchecked Sendable {
             id: account.id,
             label: account.label,
             email: account.email,
+            note: account.note,
             accountID: account.accountID,
             planType: account.planType,
             teamName: account.teamName,
             usage: account.usage,
             isCurrent: false
         )
+    }
+
+    func updateNote(identifier: String, note: String?) throws -> [AccountSummary] {
+        var store = try storeRepository.load()
+        let currentAccountID = authRepository.currentAuthAccountID() ?? store.currentSelection?.accountID
+
+        guard let index = store.accounts.firstIndex(where: { $0.id == identifier || $0.accountID == identifier }) else {
+            throw CLIError("Account not found for identifier: \(identifier)")
+        }
+
+        let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.accounts[index].note = (trimmedNote?.isEmpty == false) ? trimmedNote : nil
+        store.accounts[index].updatedAt = Int64(Date().timeIntervalSince1970)
+        try storeRepository.save(store)
+
+        return summaries(from: store, currentAccountID: currentAccountID)
     }
 
     func clearAllAccounts() throws -> ClearedAccountsResult {
@@ -229,6 +249,7 @@ struct AccountService: @unchecked Sendable {
                     id: existing.id,
                     label: account.label.isEmpty ? existing.label : account.label,
                     email: account.email ?? existing.email,
+                    note: account.note ?? existing.note,
                     accountID: existing.accountID,
                     planType: account.planType ?? existing.planType,
                     teamName: account.teamName ?? existing.teamName,
@@ -284,6 +305,7 @@ struct AccountService: @unchecked Sendable {
             id: account.id.isEmpty ? UUID().uuidString : account.id,
             label: safeLabel,
             email: account.email,
+            note: account.note?.trimmingCharacters(in: .whitespacesAndNewlines),
             accountID: account.accountID,
             planType: account.planType,
             teamName: account.teamName,
@@ -342,6 +364,7 @@ struct AccountService: @unchecked Sendable {
                     id: UUID().uuidString,
                     label: label,
                     email: extracted.email,
+                    note: nil,
                     accountID: extracted.accountID,
                     planType: nil,
                     teamName: nil,
@@ -360,6 +383,7 @@ struct AccountService: @unchecked Sendable {
             id: saved.id,
             label: saved.label,
             email: saved.email,
+            note: saved.note,
             accountID: saved.accountID,
             planType: saved.planType,
             teamName: saved.teamName,
@@ -375,6 +399,7 @@ struct AccountService: @unchecked Sendable {
                     id: account.id,
                     label: account.label,
                     email: account.email,
+                    note: account.note,
                     accountID: account.accountID,
                     planType: account.planType,
                     teamName: account.teamName,

@@ -109,6 +109,15 @@ private struct AppCopy {
         }
     }
 
+    func savedNote(_ name: String) -> String {
+        switch language {
+        case .chinese:
+            return "已保存 \(name) 的备注"
+        case .english:
+            return "Saved note for \(name)."
+        }
+    }
+
     func clearedAccounts(accountCount: Int, removedCurrentAuth: Bool) -> String {
         switch language {
         case .chinese:
@@ -316,6 +325,42 @@ private struct AppCopy {
             return "删除中…"
         case .english:
             return "Deleting…"
+        }
+    }
+
+    var noteAction: String {
+        switch language {
+        case .chinese:
+            return "备注"
+        case .english:
+            return "Note"
+        }
+    }
+
+    var editNoteTitle: String {
+        switch language {
+        case .chinese:
+            return "编辑备注"
+        case .english:
+            return "Edit Note"
+        }
+    }
+
+    var notePlaceholder: String {
+        switch language {
+        case .chinese:
+            return "记录这个账户是做什么的，例如：工作主号、测试环境、客户演示。"
+        case .english:
+            return "Describe what this account is used for, such as work, testing, or demos."
+        }
+    }
+
+    var saveAction: String {
+        switch language {
+        case .chinese:
+            return "保存"
+        case .english:
+            return "Save"
         }
     }
 
@@ -536,6 +581,7 @@ fileprivate enum AppNotice {
     case switched(String)
     case added(String)
     case deleted(String)
+    case savedNote(String)
     case cleared(accountCount: Int, removedCurrentAuth: Bool)
     case exported(accountCount: Int, outputPath: String)
     case imported(totalCount: Int, addedCount: Int, updatedCount: Int)
@@ -550,6 +596,8 @@ fileprivate enum AppNotice {
             return copy.addedAccount(name)
         case .deleted(let name):
             return copy.deletedAccount(name)
+        case .savedNote(let name):
+            return copy.savedNote(name)
         case .cleared(let accountCount, let removedCurrentAuth):
             return copy.clearedAccounts(accountCount: accountCount, removedCurrentAuth: removedCurrentAuth)
         case .exported(let accountCount, let outputPath):
@@ -590,8 +638,10 @@ final class AccountSwitcherViewModel: ObservableObject {
     @Published var isClearingAccounts = false
     @Published var switchingAccountID: String?
     @Published var deletingAccountID: String?
+    @Published var savingNoteAccountID: String?
     @Published var pendingDeletionAccount: AccountSummary?
     @Published var pendingClearAllAccountCount: Int?
+    @Published var noteEditor: NoteEditorState?
     @Published var errorMessage: String?
     @Published fileprivate var notice: AppNotice?
     @Published fileprivate private(set) var refreshingUsageAccountID: String?
@@ -610,6 +660,12 @@ final class AccountSwitcherViewModel: ObservableObject {
 
     var isUsageRefreshInFlight: Bool {
         refreshingUsageAccountID != nil || isBulkUsageRefreshInFlight
+    }
+
+    struct NoteEditorState: Identifiable {
+        let id: String
+        let account: AccountSummary
+        var draft: String
     }
 
     init() {
@@ -846,6 +902,24 @@ final class AccountSwitcherViewModel: ObservableObject {
         pendingDeletionAccount = account
     }
 
+    func presentNoteEditor(for account: AccountSummary) {
+        noteEditor = NoteEditorState(
+            id: account.id,
+            account: account,
+            draft: account.trimmedNote ?? ""
+        )
+    }
+
+    func cancelNoteEditing() {
+        noteEditor = nil
+    }
+
+    func updateNoteDraft(_ draft: String) {
+        guard var noteEditor else { return }
+        noteEditor.draft = draft
+        self.noteEditor = noteEditor
+    }
+
     func cancelDelete() {
         pendingDeletionAccount = nil
     }
@@ -869,6 +943,21 @@ final class AccountSwitcherViewModel: ObservableObject {
             let deleted = try accountService.deleteAccount(identifier: account.id)
             showNotice(.deleted(deleted.maskedDisplayName))
             await load(preserveNotice: true)
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
+    func saveNote() async {
+        guard let noteEditor else { return }
+
+        savingNoteAccountID = noteEditor.account.id
+        defer { savingNoteAccountID = nil }
+
+        do {
+            accounts = sortAccounts(try accountService.updateNote(identifier: noteEditor.account.id, note: noteEditor.draft))
+            showNotice(.savedNote(noteEditor.account.maskedDisplayName))
+            self.noteEditor = nil
         } catch {
             showError(error.localizedDescription)
         }
@@ -954,6 +1043,7 @@ struct ContentView: View {
             || model.isUsageRefreshInFlight
             || model.switchingAccountID != nil
             || model.deletingAccountID != nil
+            || model.savingNoteAccountID != nil
     }
 
     var body: some View {
@@ -1012,11 +1102,15 @@ struct ContentView: View {
                                 copy: copy,
                                 isSwitching: model.switchingAccountID == account.id,
                                 isDeleting: model.deletingAccountID == account.id,
+                                isSavingNote: model.savingNoteAccountID == account.id,
                                 isRefreshingUsage: model.isBulkUsageRefreshInFlight || model.refreshingUsageAccountID == account.id,
                                 onRefreshUsage: {
                                     Task {
                                         await model.refreshUsageManually(for: account)
                                     }
+                                },
+                                onEditNote: {
+                                    model.presentNoteEditor(for: account)
                                 },
                                 onSwitch: {
                                     Task {
@@ -1103,6 +1197,34 @@ struct ContentView: View {
                     return
                 }
                 model.showImportPickerError(error.localizedDescription)
+            }
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { model.noteEditor != nil },
+                set: { presented in
+                    if !presented {
+                        model.cancelNoteEditing()
+                    }
+                }
+            )
+        ) {
+            if let noteEditor = model.noteEditor {
+                NoteEditorSheet(
+                    account: noteEditor.account,
+                    draft: Binding(
+                        get: { model.noteEditor?.draft ?? "" },
+                        set: { model.updateNoteDraft($0) }
+                    ),
+                    copy: copy,
+                    isSaving: model.savingNoteAccountID == noteEditor.account.id
+                ) {
+                    model.cancelNoteEditing()
+                } onSave: {
+                    Task {
+                        await model.saveNote()
+                    }
+                }
             }
         }
     }
@@ -1534,13 +1656,71 @@ private enum AccountPlanKind {
     }
 }
 
+private struct NoteEditorSheet: View {
+    let account: AccountSummary
+    @Binding var draft: String
+    let copy: AppCopy
+    let isSaving: Bool
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(copy.editNoteTitle)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(StudioTheme.ink)
+
+            Text(account.maskedDisplayName)
+                .font(StudioFont.label(12))
+                .foregroundStyle(StudioTheme.muted)
+                .lineLimit(1)
+
+            TextEditor(text: $draft)
+                .font(.system(size: 13))
+                .scrollContentBackground(.hidden)
+                .padding(10)
+                .frame(minHeight: 130)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(StudioTheme.surfaceContainer)
+                )
+                .overlay(alignment: .topLeading) {
+                    if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(copy.notePlaceholder)
+                            .font(.system(size: 13))
+                            .foregroundStyle(StudioTheme.muted.opacity(0.8))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 18)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            HStack {
+                Button(copy.cancelAction, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isSaving)
+
+                Spacer()
+
+                Button(copy.saveAction, action: onSave)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isSaving)
+            }
+        }
+        .padding(20)
+        .frame(width: CodexAppSwitcherLayout.columnWidth, alignment: .leading)
+    }
+}
+
 private struct AccountCard: View {
     let account: AccountSummary
     let copy: AppCopy
     let isSwitching: Bool
     let isDeleting: Bool
+    let isSavingNote: Bool
     let isRefreshingUsage: Bool
     let onRefreshUsage: () -> Void
+    let onEditNote: () -> Void
     let onSwitch: () -> Void
     let onDelete: () -> Void
     @State private var revealsFullEmail = false
@@ -1578,73 +1758,23 @@ private struct AccountCard: View {
                 Spacer(minLength: 8)
 
                 HStack(spacing: 4) {
-                    Button {
-                        onRefreshUsage()
-                    } label: {
-                        Group {
-                            if isRefreshingUsage {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .tint(StudioTheme.ink)
-                                    .frame(width: 14, height: 14)
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .frame(width: 14, height: 14)
-                            }
-                        }
-                        .foregroundStyle(StudioTheme.ink)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(StudioTheme.surfaceContainer)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
-                        )
-                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isSwitching || isDeleting || isRefreshingUsage)
-                    .hoverTooltip(isRefreshingUsage ? copy.refreshingUsageAction : copy.refreshUsageAction)
-                    .help(isRefreshingUsage ? copy.refreshingUsageAction : copy.refreshUsageAction)
+                    noteButton
+                    refreshButton
 
                     if account.isCurrent {
                         currentContextPill
                     } else {
-                        Button {
-                            onSwitch()
-                        } label: {
-                            HStack(spacing: 6) {
-                                if isSwitching {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .tint(StudioTheme.ink)
-                                } else {
-                                    Image(systemName: "arrow.left.arrow.right")
-                                        .font(.system(size: 11, weight: .semibold))
-                                }
-                            }
-                            .foregroundStyle(StudioTheme.ink)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(StudioTheme.surfaceContainer)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isSwitching || isDeleting || isRefreshingUsage)
-                        .hoverTooltip(copy.switchAction)
-                        .help(copy.switchAction)
+                        switchButton
                     }
                 }
+            }
+
+            if let note = account.trimmedNote {
+                Text(note)
+                    .font(.system(size: 12))
+                    .foregroundStyle(StudioTheme.muted)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             StitchUsageStrip(account: account, copy: copy)
@@ -1667,12 +1797,19 @@ private struct AccountCard: View {
             }
         }
         .contextMenu {
+            Button {
+                onEditNote()
+            } label: {
+                Label(copy.noteAction, systemImage: "note.text")
+            }
+            .disabled(isSwitching || isDeleting || isRefreshingUsage || isSavingNote)
+
             Button(role: .destructive) {
                 onDelete()
             } label: {
                 Label(isDeleting ? copy.deletingAccountMenu : copy.deleteAccountMenu, systemImage: "trash")
             }
-            .disabled(isSwitching || isDeleting || isRefreshingUsage || account.isCurrent)
+            .disabled(isSwitching || isDeleting || isRefreshingUsage || isSavingNote || account.isCurrent)
         }
     }
 
@@ -1684,6 +1821,88 @@ private struct AccountCard: View {
             value = account.maskedEmail ?? account.maskedDisplayName
         }
         return value.uppercased()
+    }
+
+    private var noteButton: some View {
+        Button(action: onEditNote) {
+            controlCapsule {
+                if isSavingNote {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(StudioTheme.ink)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: account.trimmedNote == nil ? "note.text.badge.plus" : "note.text")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 14, height: 14)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isControlDisabled)
+        .hoverTooltip(copy.noteAction)
+        .help(copy.noteAction)
+    }
+
+    private var refreshButton: some View {
+        Button(action: onRefreshUsage) {
+            controlCapsule {
+                if isRefreshingUsage {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(StudioTheme.ink)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 14, height: 14)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isControlDisabled)
+        .hoverTooltip(isRefreshingUsage ? copy.refreshingUsageAction : copy.refreshUsageAction)
+        .help(isRefreshingUsage ? copy.refreshingUsageAction : copy.refreshUsageAction)
+    }
+
+    private var switchButton: some View {
+        Button(action: onSwitch) {
+            controlCapsule(horizontalPadding: 10) {
+                if isSwitching {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(StudioTheme.ink)
+                } else {
+                    Image(systemName: "arrow.left.arrow.right")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isControlDisabled)
+        .hoverTooltip(copy.switchAction)
+        .help(copy.switchAction)
+    }
+
+    private var isControlDisabled: Bool {
+        isSwitching || isDeleting || isRefreshingUsage || isSavingNote
+    }
+
+    @ViewBuilder
+    private func controlCapsule<Content: View>(horizontalPadding: CGFloat = 8, @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .foregroundStyle(StudioTheme.ink)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(StudioTheme.surfaceContainer)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(StudioTheme.outlineVariant.opacity(0.12), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var currentContextPill: some View {

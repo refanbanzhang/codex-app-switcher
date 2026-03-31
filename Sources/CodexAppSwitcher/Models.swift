@@ -10,6 +10,7 @@ struct StoredAccount: Codable {
     var id: String
     var label: String
     var email: String?
+    var note: String?
     var accountID: String
     var planType: String?
     var teamName: String?
@@ -22,6 +23,7 @@ struct StoredAccount: Codable {
         case id
         case label
         case email
+        case note
         case accountID = "accountId"
         case planType
         case teamName
@@ -42,6 +44,7 @@ struct AccountSummary: Identifiable {
     var id: String
     var label: String
     var email: String?
+    var note: String?
     var accountID: String
     var planType: String?
     var teamName: String?
@@ -105,6 +108,10 @@ struct AccountSummary: Identifiable {
         usage?.oneWeek?.resetAt
     }
 
+    var trimmedNote: String? {
+        let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 private extension String {
