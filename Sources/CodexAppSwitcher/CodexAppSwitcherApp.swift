@@ -898,6 +898,10 @@ final class AccountSwitcherViewModel: ObservableObject {
         showError(message)
     }
 
+    func dismissStatusOverlay() {
+        clearBanner()
+    }
+
     func confirmDelete(_ account: AccountSummary) {
         pendingDeletionAccount = account
     }
@@ -1089,8 +1093,6 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .zIndex(10)
 
-                    banner
-
                     if model.isLoading && model.accounts.isEmpty {
                         loadingBlock
                     } else if model.accounts.isEmpty {
@@ -1132,7 +1134,13 @@ struct ContentView: View {
                         .frame(width: 0, height: 0)
                 }
             }
+
+            statusOverlay
+                .transition(.asymmetric(insertion: .scale(scale: 0.96).combined(with: .opacity), removal: .opacity))
+                .zIndex(20)
         }
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: model.errorMessage != nil)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: model.notice != nil)
         .task {
             model.updateSortOption(selectedSortOption)
             await model.load()
@@ -1239,11 +1247,21 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private var banner: some View {
+    private var statusOverlay: some View {
         if let message = model.errorMessage {
-            StatusBanner(message: message, icon: "exclamationmark.triangle", tint: StudioTheme.danger)
+            StatusOverlay(
+                message: message,
+                icon: "exclamationmark.triangle",
+                tint: StudioTheme.danger,
+                onDismiss: model.dismissStatusOverlay
+            )
         } else if let notice = model.notice {
-            StatusBanner(message: notice.localized(using: copy), icon: "checkmark.circle", tint: StudioTheme.success)
+            StatusOverlay(
+                message: notice.localized(using: copy),
+                icon: "checkmark.circle",
+                tint: StudioTheme.success,
+                onDismiss: model.dismissStatusOverlay
+            )
         }
     }
 
@@ -2215,24 +2233,46 @@ private struct StitchChip: View {
     }
 }
 
-private struct StatusBanner: View {
+private struct StatusOverlay: View {
     let message: String
     let icon: String
     let tint: Color
+    let onDismiss: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 14, weight: .bold))
+        ZStack {
+            Color.black.opacity(0.12)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onDismiss)
 
-            Text(message)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .foregroundStyle(tint)
-        .padding(15)
-        .background {
-            GlassPanelBackground(cornerRadius: 20, fillOpacity: 0.78, borderColor: tint.opacity(0.16))
+            VStack {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: icon)
+                        .font(.system(size: 14, weight: .bold))
+                        .padding(.top, 1)
+
+                    Text(message)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(tint.opacity(0.82))
+                }
+                .foregroundStyle(tint)
+                .padding(15)
+                .frame(maxWidth: min(CodexAppSwitcherLayout.columnWidth, 420), alignment: .leading)
+                .background {
+                    GlassPanelBackground(cornerRadius: 20, fillOpacity: 0.88, borderColor: tint.opacity(0.18), shadowRadius: 28)
+                }
+                .padding(.horizontal, 24)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
